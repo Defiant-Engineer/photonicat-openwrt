@@ -1,0 +1,3609 @@
+diff --git a/package/boot/uboot-rockchip/Makefile b/package/boot/uboot-rockchip/Makefile
+index c43c0fef4fcb4a..313e6a8ed34a7b 100644
+--- a/package/boot/uboot-rockchip/Makefile
++++ b/package/boot/uboot-rockchip/Makefile
+@@ -332,6 +332,7 @@ define U-Boot/generic-rk3576
+   $(U-Boot/rk3576/Default)
+   NAME:=Generic RK3576
+   BUILD_DEVICES:= \
++    ariaboard_photonicat-2 \
+     friendlyarm_nanopi-r76s
+ endef
+ 
+@@ -480,6 +481,16 @@ UBOOT_MAKE_FLAGS += \
+   BL31=$(STAGING_DIR_IMAGE)/$(ATF) \
+   $(if $(TPL),ROCKCHIP_TPL=$(STAGING_DIR_IMAGE)/$(TPL))
+ 
++define Build/Configure
++	$(call Build/Configure/U-Boot)
++
++ifneq ($(filter %rk3576,$(BUILD_VARIANT)),)
++	$(TARGET_CC) -nostdlib -ffreestanding -Os -S -o $(PKG_BUILD_DIR)/rk3576-boost.S $(PKG_BUILD_DIR)/rk3576-boost.c
++	$(TARGET_CROSS)as -o $(PKG_BUILD_DIR)/rk3576-boost.o $(PKG_BUILD_DIR)/rk3576-boost.S
++	$(TARGET_CROSS)objcopy -O binary -j .text $(PKG_BUILD_DIR)/rk3576-boost.o $(PKG_BUILD_DIR)/rk3576-boost.bin
++endif
++endef
++
+ define Build/InstallDev
+ 	$(INSTALL_DIR) $(STAGING_DIR_IMAGE)
+ 	$(CP) $(PKG_BUILD_DIR)/u-boot-rockchip.bin $(STAGING_DIR_IMAGE)/$(BUILD_VARIANT)-u-boot-rockchip.bin
+diff --git a/package/boot/uboot-rockchip/patches/116-1-rockchip-mkimage-Split-size_and_off-and-size_and_nimage.patch b/package/boot/uboot-rockchip/patches/116-1-rockchip-mkimage-Split-size_and_off-and-size_and_nimage.patch
+new file mode 100644
+index 00000000000000..731c8fe8d6d4d9
+--- /dev/null
++++ b/package/boot/uboot-rockchip/patches/116-1-rockchip-mkimage-Split-size_and_off-and-size_and_nimage.patch
+@@ -0,0 +1,121 @@
++From cb682b364eb2d49c3ee2a1f7f33258919f5da688 Mon Sep 17 00:00:00 2001
++From: Jonas Karlman <jonas@kwiboo.se>
++Date: Wed, 29 Jan 2025 22:36:27 +0000
++Subject: [PATCH] rockchip: mkimage: Split size_and_off and size_and_nimage
++
++Split 32-bit size_and_off and size_and_nimage fields of the v2 image
++format header into their own 16-bit size, offset and num_images fields.
++
++Set num_images based on number of images passed by the datafile
++parameter and size based on the offset to the hash field to fix using a
++single init data file and no boot data file for the v2 image format.
++
++Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
++---
++ tools/rkcommon.c | 44 ++++++++++++++++++++++++--------------------
++ 1 file changed, 24 insertions(+), 20 deletions(-)
++
++--- a/tools/rkcommon.c
+++++ b/tools/rkcommon.c
++@@ -34,15 +34,16 @@ enum hash_type {
++ /**
++  * struct image_entry
++  *
++- * @size_and_off:	[31:16]image size;[15:0]image offset
++- * @address:	default as 0xFFFFFFFF
+++ * @offset:	image offset (unit as 512 byte blocks)
+++ * @size:	image size (unit as 512 byte blocks)
+++ * @address:	load address (default as 0xFFFFFFFF)
++  * @flag:	no use
++  * @counter:	no use
++  * @hash:	hash of image
++- *
++  */
++ struct image_entry {
++-	uint32_t size_and_off;
+++	uint16_t offset;
+++	uint16_t size;
++ 	uint32_t address;
++ 	uint32_t flag;
++ 	uint32_t counter;
++@@ -56,16 +57,17 @@ struct image_entry {
++  * This is stored at SD card block 64 (where each block is 512 bytes)
++  *
++  * @magic:	Magic (must be RK_MAGIC_V2)
++- * @size_and_nimage:	[31:16]number of images;[15:0]
++- *			offset to hash field of header(unit as 4Byte)
++- * @boot_flag:	[3:0]hash type(0:none,1:sha256,2:sha512)
++- * @signature:	hash or signature for header info
++- *
+++ * @size:	offset to hash field of header (unit as 4 bytes)
+++ * @num_images:	number of images
+++ * @boot_flag:	[3:0] hash type (0:none, 1:sha256, 2:sha512)
+++ * @images:	images
+++ * @hash:	hash or signature for header info
++  */
++ struct header0_info_v2 {
++ 	uint32_t magic;
++ 	uint8_t reserved[4];
++-	uint32_t size_and_nimage;
+++	uint16_t size;
+++	uint16_t num_images;
++ 	uint32_t boot_flag;
++ 	uint8_t reserved1[104];
++ 	struct image_entry images[4];
++@@ -350,17 +352,18 @@ static void rkcommon_set_header0_v2(void
++ 	printf("Image Type:   Rockchip %s boot image\n",
++ 		rkcommon_get_spl_hdr(params));
++ 	memset(buf, '\0', RK_INIT_OFFSET * RK_BLK_SIZE);
++-	hdr->magic   = cpu_to_le32(RK_MAGIC_V2);
++-	hdr->size_and_nimage = cpu_to_le32((2 << 16) + 384);
+++	hdr->magic = cpu_to_le32(RK_MAGIC_V2);
++ 	hdr->boot_flag = cpu_to_le32(HASH_SHA256);
++ 	sector_offset = 4;
++ 	image_size_array[0] = spl_params.init_size;
++ 	image_size_array[1] = spl_params.boot_size;
++ 
++ 	for (i = 0; i < 2; i++) {
+++		if (!image_size_array[i])
+++			break;
++ 		image_sector_count = image_size_array[i] / RK_BLK_SIZE;
++-		hdr->images[i].size_and_off = cpu_to_le32((image_sector_count
++-							<< 16) + sector_offset);
+++		hdr->images[i].offset = cpu_to_le16(sector_offset);
+++		hdr->images[i].size = cpu_to_le16(image_sector_count);
++ 		hdr->images[i].address = 0xFFFFFFFF;
++ 		hdr->images[i].counter = cpu_to_le32(i + 1);
++ 		image_ptr = buf + sector_offset * RK_BLK_SIZE;
++@@ -369,6 +372,8 @@ static void rkcommon_set_header0_v2(void
++ 		sector_offset = sector_offset + image_sector_count;
++ 	}
++ 
+++	hdr->num_images = cpu_to_le16(i);
+++	hdr->size = cpu_to_le16(offsetof(typeof(*hdr), hash) / sizeof(uint32_t));
++ 	do_sha256_hash(buf, (void *)hdr->hash - buf, hdr->hash);
++ }
++ 
++@@ -515,10 +520,8 @@ void rkcommon_print_header(const void *b
++ 			return;
++ 		}
++ 
++-		init_size = header0_v2.images[0].size_and_off >> 16;
++-		init_size = init_size * RK_BLK_SIZE;
++-		boot_size = header0_v2.images[1].size_and_off >> 16;
++-		boot_size = boot_size * RK_BLK_SIZE;
+++		init_size = le16_to_cpu(header0_v2.images[0].size) * RK_BLK_SIZE;
+++		boot_size = le16_to_cpu(header0_v2.images[1].size) * RK_BLK_SIZE;
++ 	} else {
++ 		ret = rkcommon_parse_header(buf, &header0, &spl_info);
++ 
++@@ -532,8 +535,9 @@ void rkcommon_print_header(const void *b
++ 		}
++ 
++ 		image_type = ret;
++-		init_size = header0.init_size * RK_BLK_SIZE;
++-		boot_size = header0.init_boot_size * RK_BLK_SIZE - init_size;
+++		init_size = le16_to_cpu(header0.init_size) * RK_BLK_SIZE;
+++		boot_size = le16_to_cpu(header0.init_boot_size) * RK_BLK_SIZE -
+++			    init_size;
++ 
++ 		printf("Image Type:   Rockchip %s (%s) boot image\n",
++ 		       spl_info->spl_hdr,
+diff --git a/package/boot/uboot-rockchip/patches/116-2-rockchip-mkimage-Print-image-information-for-all-embedded.patch b/package/boot/uboot-rockchip/patches/116-2-rockchip-mkimage-Print-image-information-for-all-embedded.patch
+new file mode 100644
+index 00000000000000..d0548871989bd9
+--- /dev/null
++++ b/package/boot/uboot-rockchip/patches/116-2-rockchip-mkimage-Print-image-information-for-all-embedded.patch
+@@ -0,0 +1,108 @@
++From 0085f8509d62591560901c11fa9d63e34da4fa62 Mon Sep 17 00:00:00 2001
++From: Jonas Karlman <jonas@kwiboo.se>
++Date: Wed, 29 Jan 2025 22:36:28 +0000
++Subject: [PATCH] rockchip: mkimage: Print image information for all embedded
++ images
++
++The v2 image format can embed up to 4 data files compared to the two
++init and boot data files using the older image format.
++
++Add support for displaying more of the image header information that
++exists in the v2 image format, e.g. image load address and flag.
++
++Example for v2 image format:
++
++  > tools/mkimage -l rk3576_idblock_v1.09.107.img
++  Rockchip Boot Image (v2)
++  Image 1: 4096 @ 0x1000
++  - Load address: 0x3ffc0000
++  Image 2: 77824 @ 0x2000
++  - Load address: 0x3ff81000
++  Image 3: 262144 @ 0x15000
++
++Example for older image format:
++
++  > tools/mkimage -l u-boot-rockchip.bin
++  Rockchip RK32 (SD/MMC) Boot Image
++  Init Data: 20480 @ 0x800
++  Boot Data: 112640 @ 0x5800
++
++Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
++---
++ tools/rkcommon.c | 41 +++++++++++++++++++++++++++++++----------
++ 1 file changed, 31 insertions(+), 10 deletions(-)
++
++--- a/tools/rkcommon.c
+++++ b/tools/rkcommon.c
++@@ -349,8 +349,6 @@ static void rkcommon_set_header0_v2(void
++ 	uint8_t *image_ptr = NULL;
++ 	int i;
++ 
++-	printf("Image Type:   Rockchip %s boot image\n",
++-		rkcommon_get_spl_hdr(params));
++ 	memset(buf, '\0', RK_INIT_OFFSET * RK_BLK_SIZE);
++ 	hdr->magic = cpu_to_le32(RK_MAGIC_V2);
++ 	hdr->boot_flag = cpu_to_le32(HASH_SHA256);
++@@ -504,6 +502,29 @@ int rkcommon_verify_header(unsigned char
++ 	return -ENOENT;
++ }
++ 
+++static void rkcommon_print_header_v2(const struct header0_info_v2 *hdr)
+++{
+++	uint32_t val;
+++	int i;
+++
+++	printf("Rockchip Boot Image (v2)\n");
+++
+++	for (i = 0; i < le16_to_cpu(hdr->num_images); i++) {
+++		printf("Image %u: %u @ 0x%x\n",
+++		       le32_to_cpu(hdr->images[i].counter),
+++		       le16_to_cpu(hdr->images[i].size) * RK_BLK_SIZE,
+++		       le16_to_cpu(hdr->images[i].offset) * RK_BLK_SIZE);
+++
+++		val = le32_to_cpu(hdr->images[i].address);
+++		if (val != 0xFFFFFFFF)
+++			printf("- Load address: 0x%x\n", val);
+++
+++		val = le32_to_cpu(hdr->images[i].flag);
+++		if (val)
+++			printf("- Flag: 0x%x\n", val);
+++	}
+++}
+++
++ void rkcommon_print_header(const void *buf, struct image_tool_params *params)
++ {
++ 	struct header0_info header0;
++@@ -520,8 +541,7 @@ void rkcommon_print_header(const void *b
++ 			return;
++ 		}
++ 
++-		init_size = le16_to_cpu(header0_v2.images[0].size) * RK_BLK_SIZE;
++-		boot_size = le16_to_cpu(header0_v2.images[1].size) * RK_BLK_SIZE;
+++		rkcommon_print_header_v2(&header0_v2);
++ 	} else {
++ 		ret = rkcommon_parse_header(buf, &header0, &spl_info);
++ 
++@@ -539,15 +559,16 @@ void rkcommon_print_header(const void *b
++ 		boot_size = le16_to_cpu(header0.init_boot_size) * RK_BLK_SIZE -
++ 			    init_size;
++ 
++-		printf("Image Type:   Rockchip %s (%s) boot image\n",
++-		       spl_info->spl_hdr,
+++		printf("Rockchip %s (%s) Boot Image\n", spl_info->spl_hdr,
++ 		       (image_type == IH_TYPE_RKSD) ? "SD/MMC" : "SPI");
++-	}
++ 
++-	printf("Init Data Size: %d bytes\n", init_size);
+++		printf("Init Data: %d @ 0x%x\n", init_size,
+++		       le16_to_cpu(header0.init_offset) * RK_BLK_SIZE);
++ 
++-	if (boot_size != RK_MAX_BOOT_SIZE)
++-		printf("Boot Data Size: %d bytes\n", boot_size);
+++		if (boot_size != RK_MAX_BOOT_SIZE)
+++			printf("Boot Data: %d @ 0x%x\n", boot_size, init_size +
+++			       le16_to_cpu(header0.init_offset) * RK_BLK_SIZE);
+++	}
++ }
++ 
++ void rkcommon_rc4_encode_spl(void *buf, unsigned int offset, unsigned int size)
+diff --git a/package/boot/uboot-rockchip/patches/116-3-rockchip-mkimage-Print-boot0-and-boot1-parameters.patch b/package/boot/uboot-rockchip/patches/116-3-rockchip-mkimage-Print-boot0-and-boot1-parameters.patch
+new file mode 100644
+index 00000000000000..80ae89e047b401
+--- /dev/null
++++ b/package/boot/uboot-rockchip/patches/116-3-rockchip-mkimage-Print-boot0-and-boot1-parameters.patch
+@@ -0,0 +1,70 @@
++From 83326e18d15be1ac9b7daf7b472d0bcb8074da2b Mon Sep 17 00:00:00 2001
++From: Jonas Karlman <jonas@kwiboo.se>
++Date: Wed, 29 Jan 2025 22:36:29 +0000
++Subject: [PATCH] rockchip: mkimage: Print boot0 and boot1 parameters
++
++The v2 image format embeds boot0 and boot1 parameters, the vendor tool
++boot_merger may write these parameters based on the rkboot miniall.ini
++files.
++
++E.g. a RK3576 boot image may contain a boot1 parameter that signals
++BootROM or vendor blobs to use 1 GHz instead of the regular 24 MHz rate
++for the high precision timer.
++
++Add support for printing boot0 and boot1 parameters, e.g.:
++
++  > tools/mkimage -l rk3576_idblock_v1.09.107.img
++  Rockchip Boot Image (v2)
++  Boot1 2: 0x100
++  Image 1: 4096 @ 0x1000
++  - Load address: 0x3ffc0000
++  Image 2: 77824 @ 0x2000
++  - Load address: 0x3ff81000
++  Image 3: 262144 @ 0x15000
++
++Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
++---
++ tools/rkcommon.c | 18 +++++++++++++++++-
++ 1 file changed, 17 insertions(+), 1 deletion(-)
++
++--- a/tools/rkcommon.c
+++++ b/tools/rkcommon.c
++@@ -62,6 +62,8 @@ struct image_entry {
++  * @boot_flag:	[3:0] hash type (0:none, 1:sha256, 2:sha512)
++  * @images:	images
++  * @hash:	hash or signature for header info
+++ *
+++ * Other fields are not used by U-Boot
++  */
++ struct header0_info_v2 {
++ 	uint32_t magic;
++@@ -69,7 +71,9 @@ struct header0_info_v2 {
++ 	uint16_t size;
++ 	uint16_t num_images;
++ 	uint32_t boot_flag;
++-	uint8_t reserved1[104];
+++	uint8_t reserved1[32];
+++	uint32_t boot0_param[10];
+++	uint32_t boot1_param[8];
++ 	struct image_entry images[4];
++ 	uint8_t reserved2[1064];
++ 	uint8_t hash[512];
++@@ -509,6 +513,18 @@ static void rkcommon_print_header_v2(con
++ 
++ 	printf("Rockchip Boot Image (v2)\n");
++ 
+++	for (i = 0; i < ARRAY_SIZE(hdr->boot0_param); i++) {
+++		val = le32_to_cpu(hdr->boot0_param[i]);
+++		if (val)
+++			printf("Boot0 %d: 0x%x\n", i, val);
+++	}
+++
+++	for (i = 0; i < ARRAY_SIZE(hdr->boot1_param); i++) {
+++		val = le32_to_cpu(hdr->boot1_param[i]);
+++		if (val)
+++			printf("Boot1 %d: 0x%x\n", i, val);
+++	}
+++
++ 	for (i = 0; i < le16_to_cpu(hdr->num_images); i++) {
++ 		printf("Image %u: %u @ 0x%x\n",
++ 		       le32_to_cpu(hdr->images[i].counter),
+diff --git a/package/boot/uboot-rockchip/patches/116-4-rockchip-mkimage-Add-option-to-change-image-offset-alignm.patch b/package/boot/uboot-rockchip/patches/116-4-rockchip-mkimage-Add-option-to-change-image-offset-alignm.patch
+new file mode 100644
+index 00000000000000..5f4322a44977ee
+--- /dev/null
++++ b/package/boot/uboot-rockchip/patches/116-4-rockchip-mkimage-Add-option-to-change-image-offset-alignm.patch
+@@ -0,0 +1,208 @@
++From a9a5d21d926594a87e8db877d4b9261200c3f8fd Mon Sep 17 00:00:00 2001
++From: Jonas Karlman <jonas@kwiboo.se>
++Date: Wed, 29 Jan 2025 22:36:30 +0000
++Subject: [PATCH] rockchip: mkimage: Add option to change image offset
++ alignment
++
++The vendor boot_merger tool support a ALIGN parameter that is used to
++define offset alignment of the embedded images.
++
++Vendor use this for RK3576 to change offset alignment from the common
++2 KiB to 4 KiB, presumably it may have something to do with UFS.
++Testing with eMMC has shown that using a 512-byte alignment also work.
++
++Add support for overriding offset alignment in case this is needed for
++e.g. RK3576 in the future.
++
++Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
++---
++ tools/rkcommon.c | 75 +++++++++++++++++++++++++++++++-----------------
++ tools/rkcommon.h |  2 --
++ 2 files changed, 49 insertions(+), 28 deletions(-)
++
++--- a/tools/rkcommon.c
+++++ b/tools/rkcommon.c
++@@ -140,6 +140,7 @@ struct spl_info {
++ 	const uint32_t spl_size;
++ 	const bool spl_rc4;
++ 	const uint32_t header_ver;
+++	const uint32_t align;
++ };
++ 
++ static struct spl_info spl_infos[] = {
++@@ -199,14 +200,19 @@ static struct spl_info *rkcommon_get_spl
++ 	return NULL;
++ }
++ 
++-static int rkcommon_get_aligned_size(struct image_tool_params *params,
++-				     const char *fname)
+++static bool rkcommon_is_header_v2(struct image_tool_params *params)
++ {
++-	int size;
+++	struct spl_info *info = rkcommon_get_spl_info(params->imagename);
++ 
++-	size = imagetool_get_filesize(params, fname);
++-	if (size < 0)
++-		return -1;
+++	return (info->header_ver == RK_HEADER_V2);
+++}
+++
+++static int rkcommon_get_aligned_size(struct image_tool_params *params, int size)
+++{
+++	struct spl_info *info = rkcommon_get_spl_info(params->imagename);
+++
+++	if (info->align)
+++		return ROUND(size, info->align * RK_BLK_SIZE);
++ 
++ 	/*
++ 	 * Pad to a 2KB alignment, as required for init/boot size by the ROM
++@@ -215,6 +221,27 @@ static int rkcommon_get_aligned_size(str
++ 	return ROUND(size, RK_SIZE_ALIGN);
++ }
++ 
+++static int rkcommon_get_header_size(struct image_tool_params *params)
+++{
+++	int header_size = rkcommon_is_header_v2(params) ?
+++			  sizeof(struct header0_info_v2) :
+++			  sizeof(struct header0_info);
+++
+++	return rkcommon_get_aligned_size(params, header_size);
+++}
+++
+++static int rkcommon_get_aligned_filesize(struct image_tool_params *params,
+++					 const char *fname)
+++{
+++	int size;
+++
+++	size = imagetool_get_filesize(params, fname);
+++	if (size < 0)
+++		return -1;
+++
+++	return rkcommon_get_aligned_size(params, size);
+++}
+++
++ int rkcommon_check_params(struct image_tool_params *params)
++ {
++ 	int i, size;
++@@ -237,14 +264,14 @@ int rkcommon_check_params(struct image_t
++ 		spl_params.boot_file += 1;
++ 	}
++ 
++-	size = rkcommon_get_aligned_size(params, spl_params.init_file);
+++	size = rkcommon_get_aligned_filesize(params, spl_params.init_file);
++ 	if (size < 0)
++ 		return EXIT_FAILURE;
++ 	spl_params.init_size = size;
++ 
++ 	/* Boot file is optional, and only for back-to-bootrom functionality. */
++ 	if (spl_params.boot_file) {
++-		size = rkcommon_get_aligned_size(params, spl_params.boot_file);
+++		size = rkcommon_get_aligned_filesize(params, spl_params.boot_file);
++ 		if (size < 0)
++ 			return EXIT_FAILURE;
++ 		spl_params.boot_size = size;
++@@ -301,13 +328,6 @@ bool rkcommon_need_rc4_spl(struct image_
++ 	return info->spl_rc4;
++ }
++ 
++-static bool rkcommon_is_header_v2(struct image_tool_params *params)
++-{
++-	struct spl_info *info = rkcommon_get_spl_info(params->imagename);
++-
++-	return (info->header_ver == RK_HEADER_V2);
++-}
++-
++ static void do_sha256_hash(uint8_t *buf, uint32_t size, uint8_t *out)
++ {
++ 	sha256_context ctx;
++@@ -320,12 +340,13 @@ static void do_sha256_hash(uint8_t *buf,
++ static void rkcommon_set_header0(void *buf, struct image_tool_params *params)
++ {
++ 	struct header0_info *hdr = buf;
++-	uint32_t init_boot_size;
+++	uint32_t init_boot_size, init_offset;
++ 
++-	memset(buf, '\0', RK_INIT_OFFSET * RK_BLK_SIZE);
+++	init_offset = rkcommon_get_header_size(params) / RK_BLK_SIZE;
+++	memset(buf, '\0', init_offset * RK_BLK_SIZE);
++ 	hdr->magic = cpu_to_le32(RK_MAGIC);
++ 	hdr->disable_rc4 = cpu_to_le32(!rkcommon_need_rc4_spl(params));
++-	hdr->init_offset = cpu_to_le16(RK_INIT_OFFSET);
+++	hdr->init_offset = cpu_to_le16(init_offset);
++ 	hdr->init_size   = cpu_to_le16(spl_params.init_size / RK_BLK_SIZE);
++ 
++ 	/*
++@@ -353,10 +374,10 @@ static void rkcommon_set_header0_v2(void
++ 	uint8_t *image_ptr = NULL;
++ 	int i;
++ 
++-	memset(buf, '\0', RK_INIT_OFFSET * RK_BLK_SIZE);
+++	sector_offset = rkcommon_get_header_size(params) / RK_BLK_SIZE;
+++	memset(buf, '\0', sector_offset * RK_BLK_SIZE);
++ 	hdr->magic = cpu_to_le32(RK_MAGIC_V2);
++ 	hdr->boot_flag = cpu_to_le32(HASH_SHA256);
++-	sector_offset = 4;
++ 	image_size_array[0] = spl_params.init_size;
++ 	image_size_array[1] = spl_params.boot_size;
++ 
++@@ -382,11 +403,12 @@ static void rkcommon_set_header0_v2(void
++ void rkcommon_set_header(void *buf,  struct stat *sbuf,  int ifd,
++ 			 struct image_tool_params *params)
++ {
++-	struct header1_info *hdr = buf + RK_SPL_HDR_START;
++-
++ 	if (rkcommon_is_header_v2(params)) {
++ 		rkcommon_set_header0_v2(buf, params);
++ 	} else {
+++		int header_size = rkcommon_get_header_size(params);
+++		struct header1_info *hdr = buf + header_size;
+++
++ 		rkcommon_set_header0(buf, params);
++ 
++ 		/* Set up the SPL name (i.e. copy spl_hdr over) */
++@@ -394,12 +416,12 @@ void rkcommon_set_header(void *buf,  str
++ 			memcpy(&hdr->magic, rkcommon_get_spl_hdr(params), RK_SPL_HDR_SIZE);
++ 
++ 		if (rkcommon_need_rc4_spl(params))
++-			rkcommon_rc4_encode_spl(buf, RK_SPL_HDR_START,
+++			rkcommon_rc4_encode_spl(buf, header_size,
++ 						spl_params.init_size);
++ 
++ 		if (spl_params.boot_file) {
++ 			if (rkcommon_need_rc4_spl(params))
++-				rkcommon_rc4_encode_spl(buf + RK_SPL_HDR_START,
+++				rkcommon_rc4_encode_spl(buf + header_size,
++ 							spl_params.init_size,
++ 							spl_params.boot_size);
++ 		}
++@@ -624,7 +646,7 @@ int rkcommon_vrec_header(struct image_to
++ 	 * 4 bytes of these images can safely be overwritten using the
++ 	 * boot magic.
++ 	 */
++-	tparams->header_size = RK_SPL_HDR_START;
+++	tparams->header_size = rkcommon_get_header_size(params);
++ 
++ 	/* Allocate, clear and install the header */
++ 	tparams->hdr = malloc(tparams->header_size);
++@@ -642,7 +664,8 @@ int rkcommon_vrec_header(struct image_to
++ 	params->orig_file_size = tparams->header_size +
++ 		spl_params.init_size + spl_params.boot_size;
++ 
++-	params->file_size = ROUND(params->orig_file_size, RK_SIZE_ALIGN);
+++	params->file_size = rkcommon_get_aligned_size(params,
+++						      params->orig_file_size);
++ 
++ 	/* Ignoring pad len, since we are using our own copy_image() */
++ 	return 0;
++--- a/tools/rkcommon.h
+++++ b/tools/rkcommon.h
++@@ -10,9 +10,7 @@
++ enum {
++ 	RK_BLK_SIZE		= 512,
++ 	RK_SIZE_ALIGN		= 2048,
++-	RK_INIT_OFFSET		= 4,
++ 	RK_MAX_BOOT_SIZE	= 512 << 10,
++-	RK_SPL_HDR_START	= RK_INIT_OFFSET * RK_BLK_SIZE,
++ 	RK_SPL_HDR_SIZE		= 4,
++ };
++ 
+diff --git a/package/boot/uboot-rockchip/patches/116-5-rockchip-mkimage-Add-support-for-up-to-4-input-files.patch b/package/boot/uboot-rockchip/patches/116-5-rockchip-mkimage-Add-support-for-up-to-4-input-files.patch
+new file mode 100644
+index 00000000000000..f904f3c598cf56
+--- /dev/null
++++ b/package/boot/uboot-rockchip/patches/116-5-rockchip-mkimage-Add-support-for-up-to-4-input-files.patch
+@@ -0,0 +1,202 @@
++From 31255e35146c279696c51cde45facd1ea10eed28 Mon Sep 17 00:00:00 2001
++From: Jonas Karlman <jonas@kwiboo.se>
++Date: Wed, 29 Jan 2025 22:36:31 +0000
++Subject: [PATCH] rockchip: mkimage: Add support for up to 4 input files
++
++The v2 image format can support up to 4 embedded images that can be
++loaded by the BootROM using the back-to-bootrom method.
++
++Currently two input files can be passed in using the datafile parameter,
++separated by a colon (":").
++
++Extend the datafile parameter parsing to support up to 4 input files
++separated by a colon (":") for use with the v2 image format.
++
++Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
++---
++ tools/rkcommon.c | 93 +++++++++++++++++++++++-------------------------
++ 1 file changed, 44 insertions(+), 49 deletions(-)
++
++--- a/tools/rkcommon.c
+++++ b/tools/rkcommon.c
++@@ -166,17 +166,15 @@ static struct spl_info spl_infos[] = {
++ /**
++  * struct spl_params - spl params parsed in check_params()
++  *
++- * @init_file:		Init data file path
++- * @init_size:		Aligned size of init data in bytes
++- * @boot_file:		Boot data file path
++- * @boot_size:		Aligned size of boot data in bytes
+++ * @file:	image file path
+++ * @size:	aligned size of image in bytes
++  */
++ 
++ struct spl_params {
++-	char *init_file;
++-	uint32_t init_size;
++-	char *boot_file;
++-	uint32_t boot_size;
+++	struct {
+++		char *file;
+++		uint32_t size;
+++	} images[4];
++ };
++ 
++ static struct spl_params spl_params = { 0 };
++@@ -256,31 +254,32 @@ int rkcommon_check_params(struct image_t
++ 	if (!rkcommon_get_spl_info(params->imagename))
++ 		goto err_spl_info;
++ 
++-	spl_params.init_file = params->datafile;
+++	spl_params.images[0].file = params->datafile;
+++	for (i = 1; i < ARRAY_SIZE(spl_params.images); i++) {
+++		spl_params.images[i].file =
+++				strchr(spl_params.images[i - 1].file, ':');
+++		if (!spl_params.images[i].file)
+++			break;
++ 
++-	spl_params.boot_file = strchr(spl_params.init_file, ':');
++-	if (spl_params.boot_file) {
++-		*spl_params.boot_file = '\0';
++-		spl_params.boot_file += 1;
+++		*spl_params.images[i].file = '\0';
+++		spl_params.images[i].file += 1;
++ 	}
++ 
++-	size = rkcommon_get_aligned_filesize(params, spl_params.init_file);
++-	if (size < 0)
++-		return EXIT_FAILURE;
++-	spl_params.init_size = size;
+++	for (i = 0; i < ARRAY_SIZE(spl_params.images); i++) {
+++		if (!spl_params.images[i].file)
+++			break;
++ 
++-	/* Boot file is optional, and only for back-to-bootrom functionality. */
++-	if (spl_params.boot_file) {
++-		size = rkcommon_get_aligned_filesize(params, spl_params.boot_file);
+++		size = rkcommon_get_aligned_filesize(params,
+++						     spl_params.images[i].file);
++ 		if (size < 0)
++ 			return EXIT_FAILURE;
++-		spl_params.boot_size = size;
+++		spl_params.images[i].size = size;
++ 	}
++ 
++-	if (spl_params.init_size > rkcommon_get_spl_size(params)) {
+++	if (spl_params.images[0].size > rkcommon_get_spl_size(params)) {
++ 		fprintf(stderr,
++ 			"Error: SPL image is too large (size %#x than %#x)\n",
++-			spl_params.init_size, rkcommon_get_spl_size(params));
+++			spl_params.images[0].size, rkcommon_get_spl_size(params));
++ 		return EXIT_FAILURE;
++ 	}
++ 
++@@ -347,7 +346,7 @@ static void rkcommon_set_header0(void *b
++ 	hdr->magic = cpu_to_le32(RK_MAGIC);
++ 	hdr->disable_rc4 = cpu_to_le32(!rkcommon_need_rc4_spl(params));
++ 	hdr->init_offset = cpu_to_le16(init_offset);
++-	hdr->init_size   = cpu_to_le16(spl_params.init_size / RK_BLK_SIZE);
+++	hdr->init_size = cpu_to_le16(spl_params.images[0].size / RK_BLK_SIZE);
++ 
++ 	/*
++ 	 * init_boot_size needs to be set, as it is read by the BootROM
++@@ -357,10 +356,11 @@ static void rkcommon_set_header0(void *b
++ 	 * see https://lists.denx.de/pipermail/u-boot/2017-May/293267.html
++ 	 * for a more detailed explanation by Andy Yan
++ 	 */
++-	if (spl_params.boot_file)
++-		init_boot_size = spl_params.init_size + spl_params.boot_size;
+++	if (spl_params.images[1].file)
+++		init_boot_size = spl_params.images[0].size +
+++				 spl_params.images[1].size;
++ 	else
++-		init_boot_size = spl_params.init_size + RK_MAX_BOOT_SIZE;
+++		init_boot_size = spl_params.images[0].size + RK_MAX_BOOT_SIZE;
++ 	hdr->init_boot_size = cpu_to_le16(init_boot_size / RK_BLK_SIZE);
++ 
++ 	rc4_encode(buf, RK_BLK_SIZE, rc4_key);
++@@ -370,7 +370,6 @@ static void rkcommon_set_header0_v2(void
++ {
++ 	struct header0_info_v2 *hdr = buf;
++ 	uint32_t sector_offset, image_sector_count;
++-	uint32_t image_size_array[2];
++ 	uint8_t *image_ptr = NULL;
++ 	int i;
++ 
++@@ -378,19 +377,17 @@ static void rkcommon_set_header0_v2(void
++ 	memset(buf, '\0', sector_offset * RK_BLK_SIZE);
++ 	hdr->magic = cpu_to_le32(RK_MAGIC_V2);
++ 	hdr->boot_flag = cpu_to_le32(HASH_SHA256);
++-	image_size_array[0] = spl_params.init_size;
++-	image_size_array[1] = spl_params.boot_size;
++ 
++-	for (i = 0; i < 2; i++) {
++-		if (!image_size_array[i])
+++	for (i = 0; i < ARRAY_SIZE(spl_params.images); i++) {
+++		if (!spl_params.images[i].size)
++ 			break;
++-		image_sector_count = image_size_array[i] / RK_BLK_SIZE;
+++		image_sector_count = spl_params.images[i].size / RK_BLK_SIZE;
++ 		hdr->images[i].offset = cpu_to_le16(sector_offset);
++ 		hdr->images[i].size = cpu_to_le16(image_sector_count);
++ 		hdr->images[i].address = 0xFFFFFFFF;
++ 		hdr->images[i].counter = cpu_to_le32(i + 1);
++ 		image_ptr = buf + sector_offset * RK_BLK_SIZE;
++-		do_sha256_hash(image_ptr, image_size_array[i],
+++		do_sha256_hash(image_ptr, spl_params.images[i].size,
++ 			       hdr->images[i].hash);
++ 		sector_offset = sector_offset + image_sector_count;
++ 	}
++@@ -417,13 +414,13 @@ void rkcommon_set_header(void *buf,  str
++ 
++ 		if (rkcommon_need_rc4_spl(params))
++ 			rkcommon_rc4_encode_spl(buf, header_size,
++-						spl_params.init_size);
+++						spl_params.images[0].size);
++ 
++-		if (spl_params.boot_file) {
+++		if (spl_params.images[1].file) {
++ 			if (rkcommon_need_rc4_spl(params))
++ 				rkcommon_rc4_encode_spl(buf + header_size,
++-							spl_params.init_size,
++-							spl_params.boot_size);
+++							spl_params.images[0].size,
+++							spl_params.images[1].size);
++ 		}
++ 	}
++ }
++@@ -661,8 +658,9 @@ int rkcommon_vrec_header(struct image_to
++ 	 * We need to store the original file-size (i.e. before padding), as
++ 	 * imagetool does not set this during its adjustment of file_size.
++ 	 */
++-	params->orig_file_size = tparams->header_size +
++-		spl_params.init_size + spl_params.boot_size;
+++	params->orig_file_size = tparams->header_size;
+++	for (int i = 0; i < ARRAY_SIZE(spl_params.images); i++)
+++		params->orig_file_size += spl_params.images[i].size;
++ 
++ 	params->file_size = rkcommon_get_aligned_size(params,
++ 						      params->orig_file_size);
++@@ -749,16 +747,13 @@ err_close:
++ 
++ int rockchip_copy_image(int ifd, struct image_tool_params *params)
++ {
++-	int ret;
++-
++-	ret = copy_file(params, ifd, spl_params.init_file,
++-			spl_params.init_size);
++-	if (ret)
++-		return ret;
+++	int i, ret;
++ 
++-	if (spl_params.boot_file) {
++-		ret = copy_file(params, ifd, spl_params.boot_file,
++-				spl_params.boot_size);
+++	for (i = 0; i < ARRAY_SIZE(spl_params.images); i++) {
+++		if (!spl_params.images[i].size)
+++			break;
+++		ret = copy_file(params, ifd, spl_params.images[i].file,
+++				spl_params.images[i].size);
++ 		if (ret)
++ 			return ret;
++ 	}
+diff --git a/package/boot/uboot-rockchip/patches/116-6-rockchip-mkimage-Add-option-for-image-load-address-and-fl.patch b/package/boot/uboot-rockchip/patches/116-6-rockchip-mkimage-Add-option-for-image-load-address-and-fl.patch
+new file mode 100644
+index 00000000000000..3e899f4b1e8d67
+--- /dev/null
++++ b/package/boot/uboot-rockchip/patches/116-6-rockchip-mkimage-Add-option-for-image-load-address-and-fl.patch
+@@ -0,0 +1,48 @@
++From 3e252cae2b5b95c483104318120338d5a51a6b4d Mon Sep 17 00:00:00 2001
++From: Jonas Karlman <jonas@kwiboo.se>
++Date: Wed, 29 Jan 2025 22:36:32 +0000
++Subject: [PATCH] rockchip: mkimage: Add option for image load address and flag
++
++The v2 image format supports defining a load address and flag for each
++embedded image.
++
++Add initial support for writing the image load address and flag to the
++v2 image format header.
++
++This may later be used for RK3576 to embed a minimal initial image that
++if required to fix booting from SD-card due to a BootROM issue.
++
++Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
++---
++ tools/rkcommon.c | 7 ++++++-
++ 1 file changed, 6 insertions(+), 1 deletion(-)
++
++--- a/tools/rkcommon.c
+++++ b/tools/rkcommon.c
++@@ -168,12 +168,16 @@ static struct spl_info spl_infos[] = {
++  *
++  * @file:	image file path
++  * @size:	aligned size of image in bytes
+++ * @address:	image load address
+++ * @flag:	no use
++  */
++ 
++ struct spl_params {
++ 	struct {
++ 		char *file;
++ 		uint32_t size;
+++		uint32_t address;
+++		uint32_t flag;
++ 	} images[4];
++ };
++ 
++@@ -384,7 +388,8 @@ static void rkcommon_set_header0_v2(void
++ 		image_sector_count = spl_params.images[i].size / RK_BLK_SIZE;
++ 		hdr->images[i].offset = cpu_to_le16(sector_offset);
++ 		hdr->images[i].size = cpu_to_le16(image_sector_count);
++-		hdr->images[i].address = 0xFFFFFFFF;
+++		hdr->images[i].address = spl_params.images[i].address ?: 0xFFFFFFFF;
+++		hdr->images[i].flag = spl_params.images[i].flag;
++ 		hdr->images[i].counter = cpu_to_le32(i + 1);
++ 		image_ptr = buf + sector_offset * RK_BLK_SIZE;
++ 		do_sha256_hash(image_ptr, spl_params.images[i].size,
+diff --git a/package/boot/uboot-rockchip/patches/116-7-rockchip-mkimage-Add-rk3576-align-and-sd-card.patch b/package/boot/uboot-rockchip/patches/116-7-rockchip-mkimage-Add-rk3576-align-and-sd-card.patch
+new file mode 100644
+index 00000000000000..e27430bde62130
+--- /dev/null
++++ b/package/boot/uboot-rockchip/patches/116-7-rockchip-mkimage-Add-rk3576-align-and-sd-card.patch
+@@ -0,0 +1,110 @@
++From f6f1066339a58444d515f1ed72a172610995d090 Mon Sep 17 00:00:00 2001
++From: Jonas Karlman <jonas@kwiboo.se>
++Date: Tue, 28 Jan 2025 01:30:12 +0000
++Subject: [PATCH] WIP: rockchip: mkimage: Add rk3576 align and sd-card
++ workaround
++
++The BootROM on RK3576 has an issue loading boot images from an SD-card.
++This issue can be worked around by injecting an initial boot image
++before TPL that:
++
++  writel(0x3ffff800, 0x3ff803b0)
++
++Prepend an image containing binary code that does this and return to
++BootROM to load next image, TPL.
++
++TODO: embed the binary code into rkcommon.c
++
++Signed-off-by: Jonas Karlman <jonas@kwiboo.se>
++---
++ rk3576-boost.c   |  49 +++++++++++++++++++++++++++++++++++++++++++++++
++ tools/rkcommon.c |  18 ++++++++++++++++-
++ 2 files changed, 66 insertions(+), 1 deletion(-)
++ create mode 100644 rk3576-boost.c
++
++--- /dev/null
+++++ b/rk3576-boost.c
++@@ -0,0 +1,49 @@
+++// SPDX-License-Identifier: GPL-2.0-or-later
+++// Copyright Contributors to the U-Boot project.
+++
+++/*
+++ * Generate assembly code for the c code in this file:
+++ *  aarch64-linux-gnu-gcc -nostdlib -ffreestanding -Os -S -o rk3576-boost.S rk3576-boost.c
+++ *
+++ * Compile assembly code and extract the AArch64 binary code:
+++ *  aarch64-linux-gnu-as -o rk3576-boost.o rk3576-boost.S
+++ *  aarch64-linux-gnu-objcopy -O binary -j .text rk3576-boost.o rk3576-boost.bin
+++ */
+++
+++#include <stdint.h>
+++
+++#define SYS_SRAM_BASE	0x3ff80000
+++#define OFFSET		0x03b0
+++
+++int _start(void)
+++{
+++	uint32_t *sram = (void *)(SYS_SRAM_BASE + OFFSET);
+++
+++	/* set unknown value in sram to fix boot from sdmmc */
+++	*(sram) = 0x3ffff800;
+++
+++	return 0;
+++}
+++
+++/*
+++	.arch armv8-a
+++	.file	"rk3576-boost.c"
+++	.text
+++	.align	2
+++	.global	_start
+++	.type	_start, %function
+++_start:
+++.LFB0:
+++	.cfi_startproc
+++	mov	x0, 944
+++	mov	w1, 1073739776
+++	movk	x0, 0x3ff8, lsl 16
+++	str	w1, [x0]
+++	mov	w0, 0
+++	ret
+++	.cfi_endproc
+++.LFE0:
+++	.size	_start, .-_start
+++	.ident	"GCC: (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0"
+++	.section	.note.GNU-stack,"",@progbits
+++*/
++--- a/tools/rkcommon.c
+++++ b/tools/rkcommon.c
++@@ -159,7 +159,7 @@ static struct spl_info spl_infos[] = {
++ 	{ "rv1126", "110B", 0x10000 - 0x1000, false, RK_HEADER_V1 },
++ 	{ "rk3528", "RK35", 0x10000 - 0x1000, false, RK_HEADER_V2 },
++ 	{ "rk3568", "RK35", 0x10000 - 0x1000, false, RK_HEADER_V2 },
++-	{ "rk3576", "RK35", 0x80000 - 0x1000, false, RK_HEADER_V2 },
+++	{ "rk3576", "RK35", 0x80000 - 0x1000, false, RK_HEADER_V2, 8 },
++ 	{ "rk3588", "RK35", 0x100000 - 0x1000, false, RK_HEADER_V2 },
++ };
++ 
++@@ -287,6 +287,22 @@ int rkcommon_check_params(struct image_t
++ 		return EXIT_FAILURE;
++ 	}
++ 
+++	if (!strcmp(params->imagename, "rk3576")) {
+++		size = rkcommon_get_aligned_filesize(params, "rk3576-boost.bin");
+++		if (size < 0)
+++			return EXIT_SUCCESS;
+++
+++		for (i = ARRAY_SIZE(spl_params.images) - 1; i > 0; i--) {
+++			spl_params.images[i] = spl_params.images[i - 1];
+++		}
+++
+++		spl_params.images[0].file = "rk3576-boost.bin";
+++		spl_params.images[0].size = size;
+++
+++		spl_params.images[0].address = 0x3ffc0000;
+++		spl_params.images[1].address = 0x3ff81000;
+++	}
+++
++ 	return EXIT_SUCCESS;
++ 
++ err_spl_info:
+diff --git a/package/luci-app-photonicat/Makefile b/package/luci-app-photonicat/Makefile
+new file mode 100644
+index 00000000000000..418a713711659d
+--- /dev/null
++++ b/package/luci-app-photonicat/Makefile
+@@ -0,0 +1,43 @@
++# SPDX-License-Identifier: GPL-2.0
++
++include $(TOPDIR)/rules.mk
++
++PKG_NAME:=luci-app-photonicat
++PKG_VERSION:=1.0.0
++PKG_RELEASE:=1
++
++PKG_MAINTAINER:=th3cavalry
++PKG_LICENSE:=GPL-2.0
++
++include $(INCLUDE_DIR)/package.mk
++
++define Package/luci-app-photonicat
++  SECTION:=luci
++  CATEGORY:=LuCI
++  SUBMENU:=3. Applications
++  TITLE:=Photonicat 2 System Dashboard
++  DEPENDS:=+luci-base
++  PKGARCH:=all
++endef
++
++define Build/Compile
++endef
++
++define Package/luci-app-photonicat/install
++	$(INSTALL_DIR) $(1)/www
++	$(CP) ./htdocs/* $(1)/www/
++
++	$(CP) ./root/* $(1)/
++endef
++
++define Package/luci-app-photonicat/postinst
++#!/bin/sh
++[ -n "$${IPKG_INSTROOT}" ] || {
++	rm -f /tmp/luci-indexcache.*
++	rm -rf /tmp/luci-modulecache/
++	/etc/init.d/rpcd reload 2>/dev/null
++	exit 0
++}
++endef
++
++$(eval $(call BuildPackage,luci-app-photonicat))
+diff --git a/package/luci-app-photonicat/htdocs/luci-static/resources/view/photonicat/status.js b/package/luci-app-photonicat/htdocs/luci-static/resources/view/photonicat/status.js
+new file mode 100644
+index 00000000000000..310414ece40e0a
+--- /dev/null
++++ b/package/luci-app-photonicat/htdocs/luci-static/resources/view/photonicat/status.js
+@@ -0,0 +1,395 @@
++'use strict';
++'require view';
++'require rpc';
++'require poll';
++'require dom';
++
++var callGetStatus = rpc.declare({
++	object: 'luci.photonicat',
++	method: 'get_status'
++});
++
++var callSetFanMode = rpc.declare({
++	object: 'luci.photonicat',
++	method: 'set_fan_mode',
++	params: ['mode']
++});
++
++var callSetFanLevel = rpc.declare({
++	object: 'luci.photonicat',
++	method: 'set_fan_level',
++	params: ['level']
++});
++
++var callSetFanCurve = rpc.declare({
++	object: 'luci.photonicat',
++	method: 'set_fan_curve',
++	params: ['min_temp', 'max_temp', 'hysteresis']
++});
++
++var callSetCPUGovernor = rpc.declare({
++	object: 'luci.photonicat',
++	method: 'set_cpu_governor',
++	params: ['governor']
++});
++
++/* ── helpers ─────────────────────────────────────────────── */
++
++function tempColor(temp) {
++	if (temp < 40) return '#4CAF50';
++	if (temp < 55) return '#8BC34A';
++	if (temp < 65) return '#FFC107';
++	if (temp < 75) return '#FF9800';
++	if (temp < 85) return '#FF5722';
++	return '#F44336';
++}
++
++function bar(pct, color) {
++	return E('div', {
++		'style': 'background:#e0e0e0; border-radius:4px; overflow:hidden; height:18px;'
++	}, [
++		E('div', {
++			'style': 'background:' + color + '; width:' + Math.max(0, Math.min(100, pct)) +
++				'%; height:100%; border-radius:4px; transition:width 0.6s ease;'
++		})
++	]);
++}
++
++function tempBar(temp) {
++	return bar(Math.min(100, temp), tempColor(temp));
++}
++
++function row(label, value) {
++	return E('div', { 'class': 'tr' }, [
++		E('div', { 'class': 'td', 'style': 'width:160px; font-weight:bold; padding:6px 8px;' }, label),
++		E('div', { 'class': 'td', 'style': 'padding:6px 8px;' }, value)
++	]);
++}
++
++function section(title, content) {
++	return E('div', { 'class': 'cbi-section' }, [
++		E('h3', {}, title),
++		E('div', { 'class': 'cbi-section-node' }, [
++			E('div', { 'class': 'table' }, content)
++		])
++	]);
++}
++
++/* ── view ────────────────────────────────────────────────── */
++
++return view.extend({
++	_status: {},
++	_fanModeButtons: {},
++	_fanLevelSlider: null,
++	_fanLevelLabel: null,
++	_govSelect: null,
++
++	load: function() {
++		return Promise.all([callGetStatus()]);
++	},
++
++	render: function(data) {
++		this._status = data[0] || {};
++
++		var statusDiv = E('div', { 'id': 'pcat-status' });
++		var controlsDiv = E('div', { 'id': 'pcat-controls' });
++
++		this.updateStatus(statusDiv);
++		this.renderControls(controlsDiv);
++
++		poll.add(L.bind(function() {
++			return callGetStatus().then(L.bind(function(s) {
++				this._status = s;
++				var el = document.getElementById('pcat-status');
++				if (el) this.updateStatus(el);
++				this.syncControlState();
++			}, this));
++		}, this), 5);
++
++		return E('div', { 'class': 'cbi-map' }, [
++			E('h2', {}, _('Photonicat 2')),
++			E('div', { 'class': 'cbi-map-descr' },
++				_('System dashboard and hardware control for the Photonicat 2 SBC.')),
++			statusDiv,
++			controlsDiv
++		]);
++	},
++
++	/* ── status display (rebuilt every poll) ──────────────── */
++
++	updateStatus: function(container) {
++		if (!container) return;
++		var s = this._status;
++		dom.content(container, [
++			this.renderPower(s),
++			this.renderTemps(s),
++			this.renderFanStatus(s),
++			this.renderCPUStatus(s)
++		]);
++	},
++
++	renderPower: function(s) {
++		var bat = s.battery || {};
++		var chg = s.charger || {};
++
++		var pct = (bat.capacity != null) ? bat.capacity : null;
++		var batStatus = bat.status || 'Unknown';
++		var volts = (bat.voltage != null) ? bat.voltage.toFixed(2) + ' V' : '--';
++		var amps  = (bat.current != null) ? Math.abs(bat.current).toFixed(2) + ' A' : '--';
++		var batColor = (pct > 50) ? '#4CAF50' : (pct > 20) ? '#FFC107' : '#F44336';
++		var chgText = chg.online ? _('Connected') : _('Disconnected');
++
++		var rows = [];
++
++		if (pct != null) {
++			rows.push(row(_('Battery'), [
++				E('span', { 'style': 'font-size:1.2em; font-weight:bold;' }, pct + '%'),
++				E('span', { 'style': 'margin-left:12px; color:#666;' }, batStatus)
++			]));
++			rows.push(E('div', { 'class': 'tr' }, [
++				E('div', { 'class': 'td' }, ''),
++				E('div', { 'class': 'td', 'style': 'padding:2px 8px 6px;' }, [bar(pct, batColor)])
++			]));
++			rows.push(row('', [
++				E('span', {}, volts),
++				E('span', { 'style': 'margin-left:20px;' }, amps)
++			]));
++		}
++
++		rows.push(row(_('Charger'), chgText));
++
++		return section(_('Power'), rows);
++	},
++
++	renderTemps: function(s) {
++		var zones = s.thermal_zones || [];
++		var board = s.board_temp;
++		var rows = [];
++
++		if (board != null) {
++			rows.push(E('div', { 'class': 'tr' }, [
++				E('div', { 'class': 'td', 'style': 'width:160px; padding:6px 8px;' }, _('Board (MCU)')),
++				E('div', { 'class': 'td', 'style': 'width:70px; text-align:right; font-weight:bold; color:' +
++					tempColor(board) + '; padding:6px 4px;' }, board.toFixed(0) + '\u00b0C'),
++				E('div', { 'class': 'td', 'style': 'padding:6px 8px;' }, [tempBar(board)])
++			]));
++		}
++
++		for (var i = 0; i < zones.length; i++) {
++			var z = zones[i];
++			rows.push(E('div', { 'class': 'tr' }, [
++				E('div', { 'class': 'td', 'style': 'width:160px; padding:6px 8px;' }, z.type || ('Zone ' + i)),
++				E('div', { 'class': 'td', 'style': 'width:70px; text-align:right; font-weight:bold; color:' +
++					tempColor(z.temp) + '; padding:6px 4px;' }, z.temp.toFixed(0) + '\u00b0C'),
++				E('div', { 'class': 'td', 'style': 'padding:6px 8px;' }, [tempBar(z.temp)])
++			]));
++		}
++
++		return section(_('Temperatures'), rows);
++	},
++
++	renderFanStatus: function(s) {
++		var rpm   = (s.fan_rpm != null) ? s.fan_rpm + ' RPM' : '--';
++		var level = (s.fan_level != null) ? s.fan_level : '--';
++		var max   = s.fan_max_level || 9;
++		var cfg   = s.fan_config || {};
++
++		return section(_('Fan'), [
++			row(_('Speed'), rpm),
++			row(_('Level'), level + ' / ' + max +
++				'  (' + (cfg.mode || 'auto') + ' mode)')
++		]);
++	},
++
++	renderCPUStatus: function(s) {
++		var cpu = s.cpu || {};
++		var labels = { 'policy0': 'Cortex-A55 (Little)', 'policy4': 'Cortex-A76 (Big)' };
++		var rows = [];
++
++		for (var policy in cpu) {
++			var p = cpu[policy];
++			rows.push(row(labels[policy] || policy, [
++				E('span', { 'style': 'font-weight:bold;' },
++					(p.cur_freq || '--') + ' MHz'),
++				E('span', { 'style': 'margin-left:12px; color:#666;' },
++					p.governor || '--')
++			]));
++		}
++
++		return section(_('CPU'), rows);
++	},
++
++	/* ── controls (built once, kept persistent) ──────────── */
++
++	renderControls: function(container) {
++		var s = this._status;
++		var cfg = s.fan_config || {};
++		var cpu = s.cpu || {};
++
++		/* Fan mode buttons */
++		var modes = ['auto', 'manual', 'off'];
++		var modeButtons = [];
++		for (var i = 0; i < modes.length; i++) {
++			var m = modes[i];
++			var btn = E('button', {
++				'class': 'cbi-button' + (cfg.mode === m ? ' cbi-button-positive' : ''),
++				'data-mode': m,
++				'click': L.bind(this.handleFanMode, this, m),
++				'style': 'margin-right:6px;'
++			}, m.charAt(0).toUpperCase() + m.slice(1));
++			this._fanModeButtons[m] = btn;
++			modeButtons.push(btn);
++		}
++
++		/* Fan level slider (manual mode) */
++		this._fanLevelLabel = E('span', { 'style': 'font-weight:bold; min-width:2em; display:inline-block;' },
++			String(cfg.manual_level || 3));
++
++		this._fanLevelSlider = E('input', {
++			'type': 'range', 'min': '0', 'max': '9',
++			'value': String(cfg.manual_level || 3),
++			'style': 'width:200px; vertical-align:middle;',
++			'input': L.bind(function(ev) {
++				this._fanLevelLabel.textContent = ev.target.value;
++			}, this),
++			'change': L.bind(this.handleFanLevel, this)
++		});
++
++		var levelRow = E('div', {
++			'class': 'cbi-value',
++			'id': 'fan-level-row',
++			'style': cfg.mode === 'manual' ? '' : 'display:none;'
++		}, [
++			E('label', { 'class': 'cbi-value-title' }, _('Fan Level')),
++			E('div', { 'class': 'cbi-value-field' }, [
++				this._fanLevelSlider,
++				E('span', { 'style': 'margin-left:10px;' }, [
++					this._fanLevelLabel, E('span', {}, ' / 9')
++				])
++			])
++		]);
++
++		/* Fan curve inputs (auto mode) */
++		var minInput  = E('input', { 'type': 'number', 'class': 'cbi-input-text',
++			'id': 'fc-min', 'value': String(cfg.min_temp || 45),
++			'style': 'width:60px;', 'min': '20', 'max': '80' });
++		var maxInput  = E('input', { 'type': 'number', 'class': 'cbi-input-text',
++			'id': 'fc-max', 'value': String(cfg.max_temp || 85),
++			'style': 'width:60px;', 'min': '50', 'max': '110' });
++		var hystInput = E('input', { 'type': 'number', 'class': 'cbi-input-text',
++			'id': 'fc-hyst', 'value': String(cfg.hysteresis || 3),
++			'style': 'width:60px;', 'min': '1', 'max': '15' });
++
++		var curveRow = E('div', {
++			'class': 'cbi-value',
++			'id': 'fan-curve-row',
++			'style': cfg.mode === 'auto' ? '' : 'display:none;'
++		}, [
++			E('label', { 'class': 'cbi-value-title' }, _('Fan Curve')),
++			E('div', { 'class': 'cbi-value-field', 'style': 'display:flex; align-items:center; flex-wrap:wrap; gap:6px;' }, [
++				E('span', {}, _('Start')), minInput, E('span', {}, '\u00b0C'),
++				E('span', { 'style': 'margin-left:8px;' }, _('Max')), maxInput, E('span', {}, '\u00b0C'),
++				E('span', { 'style': 'margin-left:8px;' }, _('Hyst')), hystInput, E('span', {}, '\u00b0C'),
++				E('button', {
++					'class': 'cbi-button cbi-button-apply',
++					'style': 'margin-left:12px;',
++					'click': L.bind(this.handleFanCurve, this)
++				}, _('Apply'))
++			])
++		]);
++
++		/* CPU governor selector */
++		var govs = [];
++		var currentGov = '';
++		for (var p in cpu) {
++			if (cpu[p].governors && cpu[p].governors.length)
++				govs = cpu[p].governors;
++			if (cpu[p].governor)
++				currentGov = cpu[p].governor;
++		}
++
++		this._govSelect = E('select', {
++			'class': 'cbi-input-select',
++			'change': L.bind(this.handleGovernor, this)
++		});
++		for (var j = 0; j < govs.length; j++) {
++			var opt = E('option', { 'value': govs[j] }, govs[j]);
++			if (govs[j] === currentGov) opt.selected = true;
++			this._govSelect.appendChild(opt);
++		}
++
++		dom.content(container, [
++			E('div', { 'class': 'cbi-section' }, [
++				E('h3', {}, _('Fan Control')),
++				E('div', { 'class': 'cbi-section-node' }, [
++					E('div', { 'class': 'cbi-value' }, [
++						E('label', { 'class': 'cbi-value-title' }, _('Mode')),
++						E('div', { 'class': 'cbi-value-field' }, modeButtons)
++					]),
++					levelRow,
++					curveRow
++				])
++			]),
++			E('div', { 'class': 'cbi-section' }, [
++				E('h3', {}, _('CPU Governor')),
++				E('div', { 'class': 'cbi-section-node' }, [
++					E('div', { 'class': 'cbi-value' }, [
++						E('label', { 'class': 'cbi-value-title' }, _('Governor')),
++						E('div', { 'class': 'cbi-value-field' }, [
++							this._govSelect,
++							E('span', { 'style': 'margin-left:12px; color:#666;' },
++								_('Applies to all CPU clusters'))
++						])
++					])
++				])
++			])
++		]);
++	},
++
++	/* ── sync control visual state after poll ────────────── */
++
++	syncControlState: function() {
++		var mode = (this._status.fan_config || {}).mode || 'auto';
++
++		for (var m in this._fanModeButtons) {
++			this._fanModeButtons[m].className =
++				'cbi-button' + (m === mode ? ' cbi-button-positive' : '');
++		}
++
++		var lr = document.getElementById('fan-level-row');
++		if (lr) lr.style.display = (mode === 'manual') ? '' : 'none';
++
++		var cr = document.getElementById('fan-curve-row');
++		if (cr) cr.style.display = (mode === 'auto') ? '' : 'none';
++	},
++
++	/* ── event handlers ──────────────────────────────────── */
++
++	handleFanMode: function(mode) {
++		callSetFanMode(mode).then(L.bind(function() {
++			this._status.fan_config = this._status.fan_config || {};
++			this._status.fan_config.mode = mode;
++			this.syncControlState();
++		}, this));
++	},
++
++	handleFanLevel: function(ev) {
++		var level = parseInt(ev.target.value);
++		callSetFanLevel(level);
++	},
++
++	handleFanCurve: function() {
++		var min  = parseInt(document.getElementById('fc-min').value)  || 45;
++		var max  = parseInt(document.getElementById('fc-max').value)  || 85;
++		var hyst = parseInt(document.getElementById('fc-hyst').value) || 3;
++		callSetFanCurve(min, max, hyst);
++	},
++
++	handleGovernor: function(ev) {
++		callSetCPUGovernor(ev.target.value);
++	},
++
++	handleSave: null,
++	handleSaveApply: null,
++	handleReset: null
++});
+diff --git a/package/luci-app-photonicat/root/etc/config/photonicat b/package/luci-app-photonicat/root/etc/config/photonicat
+new file mode 100644
+index 00000000000000..93d9b24142db46
+--- /dev/null
++++ b/package/luci-app-photonicat/root/etc/config/photonicat
+@@ -0,0 +1,21 @@
++config fan 'fan'
++	option mode 'auto'
++	option manual_level '3'
++	option min_temp '45'
++	option max_temp '85'
++	option hysteresis '3'
++	option interval '3'
++
++config cpu 'cpu'
++	option governor 'schedutil'
++
++# display settings (used by pcat2-display daemon)
++config display 'display'
++	# pages to cycle through on short power-button press
++	option pages 'clock cellular battery network system'
++	# long-press duration in ms to trigger shutdown (default 2000)
++	option poweroff_ms '2000'
++	# screen auto-off after N seconds idle on battery (0 = never)
++	option screen_off_battery '30'
++	# screen auto-off after N seconds idle on AC/charger (0 = never)
++	option screen_off_ac '0'
+diff --git a/package/luci-app-photonicat/root/etc/init.d/photonicat-fan b/package/luci-app-photonicat/root/etc/init.d/photonicat-fan
+new file mode 100755
+index 00000000000000..e146f7123a6954
+--- /dev/null
++++ b/package/luci-app-photonicat/root/etc/init.d/photonicat-fan
+@@ -0,0 +1,31 @@
++#!/bin/sh /etc/rc.common
++# Photonicat 2 fan control daemon and hardware config
++
++START=99
++USE_PROCD=1
++
++start_service() {
++	procd_open_instance photonicat-fan
++	procd_set_param command /usr/sbin/photonicat-fan
++	procd_set_param respawn 3600 5 5
++	procd_set_param stdout 1
++	procd_set_param stderr 1
++	procd_close_instance
++}
++
++service_triggers() {
++	procd_add_reload_trigger "photonicat"
++}
++
++boot() {
++	# Apply CPU governor from UCI config at boot
++	. /lib/functions.sh
++	config_load photonicat
++	local governor
++	config_get governor cpu governor "schedutil"
++	for policy in /sys/devices/system/cpu/cpufreq/policy*; do
++		[ -f "$policy/scaling_governor" ] && \
++			echo "$governor" > "$policy/scaling_governor" 2>/dev/null
++	done
++	start
++}
+diff --git a/package/luci-app-photonicat/root/usr/sbin/photonicat-fan b/package/luci-app-photonicat/root/usr/sbin/photonicat-fan
+new file mode 100755
+index 00000000000000..c00221055cb93b
+--- /dev/null
++++ b/package/luci-app-photonicat/root/usr/sbin/photonicat-fan
+@@ -0,0 +1,140 @@
++#!/bin/sh
++# photonicat-fan — Smart fan control daemon for Photonicat 2
++#
++# Reads temperature sensors and adjusts fan speed with:
++#   - Smooth stepping (one level per interval, no sudden jumps)
++#   - Temperature hysteresis (prevents rapid oscillation)
++#   - Emergency override (full speed at critical temps)
++#   - Three modes: auto / manual / off
++
++. /lib/functions.sh
++
++# ── sysfs handles (discovered at startup) ──────────────────────
++COOLING_DEV=""
++HWMON_TEMP=""
++current_level=0
++
++# ── configuration (reloaded periodically from UCI) ─────────────
++FAN_MODE="auto"
++MANUAL_LEVEL=3
++MIN_TEMP=45
++MAX_TEMP=85
++HYSTERESIS=3
++INTERVAL=3
++
++# ── discover sysfs paths by name ──────────────────────────────
++find_sysfs_paths() {
++	local dir
++	for dir in /sys/class/hwmon/hwmon*; do
++		[ -f "$dir/name" ] || continue
++		case "$(cat "$dir/name" 2>/dev/null)" in
++			pcat_pm_hwmon_temp_mb)  HWMON_TEMP="$dir" ;;
++		esac
++	done
++	for dir in /sys/class/thermal/cooling_device*; do
++		[ -f "$dir/type" ] || continue
++		[ "$(cat "$dir/type" 2>/dev/null)" = "pcat-pm-fan" ] && COOLING_DEV="$dir"
++	done
++}
++
++# ── reload UCI configuration ──────────────────────────────────
++load_config() {
++	config_load photonicat
++	config_get FAN_MODE    fan mode         "auto"
++	config_get MANUAL_LEVEL fan manual_level "3"
++	config_get MIN_TEMP    fan min_temp      "45"
++	config_get MAX_TEMP    fan max_temp      "85"
++	config_get HYSTERESIS  fan hysteresis    "3"
++	config_get INTERVAL    fan interval      "3"
++}
++
++# ── read highest temperature across all sensors ───────────────
++get_max_temp() {
++	local max=0 temp
++	for zone in /sys/class/thermal/thermal_zone*; do
++		[ -f "$zone/temp" ] || continue
++		temp=$(cat "$zone/temp" 2>/dev/null)
++		[ -z "$temp" ] && continue
++		temp=$((temp / 1000))
++		[ "$temp" -gt "$max" ] && max=$temp
++	done
++	if [ -n "$HWMON_TEMP" ] && [ -f "$HWMON_TEMP/temp1_input" ]; then
++		temp=$(cat "$HWMON_TEMP/temp1_input" 2>/dev/null)
++		[ -n "$temp" ] && temp=$((temp / 1000))
++		[ "$temp" -gt "$max" ] && max=$temp
++	fi
++	echo "$max"
++}
++
++# ── map temperature → fan level (0-9), linear between min/max ─
++temp_to_level() {
++	local temp=$1
++	[ "$temp" -le "$MIN_TEMP" ] && { echo 0; return; }
++	[ "$temp" -ge "$MAX_TEMP" ] && { echo 9; return; }
++	local range=$((MAX_TEMP - MIN_TEMP))
++	local delta=$((temp - MIN_TEMP))
++	echo $(( (delta * 9 + range / 2) / range ))
++}
++
++# ── write fan level to cooling device ─────────────────────────
++set_fan() {
++	local level=$1
++	[ "$level" -lt 0 ] && level=0
++	[ "$level" -gt 9 ] && level=9
++	[ -n "$COOLING_DEV" ] && echo "$level" > "$COOLING_DEV/cur_state" 2>/dev/null
++	current_level=$level
++}
++
++# ── main loop ─────────────────────────────────────────────────
++main() {
++	find_sysfs_paths
++
++	if [ -z "$COOLING_DEV" ]; then
++		logger -t photonicat-fan "ERROR: Fan cooling device not found, exiting"
++		exit 1
++	fi
++
++	load_config
++	current_level=$(cat "$COOLING_DEV/cur_state" 2>/dev/null || echo 0)
++	logger -t photonicat-fan "Started: mode=$FAN_MODE min=${MIN_TEMP}C max=${MAX_TEMP}C hyst=${HYSTERESIS}C interval=${INTERVAL}s"
++
++	while true; do
++		# Reload config every iteration for responsive control via LuCI
++		load_config
++
++		case "$FAN_MODE" in
++			auto)
++				local temp=$(get_max_temp)
++				local desired=$(temp_to_level "$temp")
++
++				# Hysteresis: only decrease fan if temp + hysteresis still
++				# maps to a lower level than the current one
++				if [ "$desired" -lt "$current_level" ]; then
++					local hyst_level=$(temp_to_level "$((temp + HYSTERESIS))")
++					[ "$hyst_level" -ge "$current_level" ] && desired=$current_level
++				fi
++
++				# Emergency: jump directly to max at critical temps
++				if [ "$temp" -ge "$MAX_TEMP" ]; then
++					set_fan 9
++				elif [ "$desired" -gt "$current_level" ]; then
++					# Ramp up one step at a time
++					set_fan $((current_level + 1))
++				elif [ "$desired" -lt "$current_level" ]; then
++					# Ramp down one step at a time
++					set_fan $((current_level - 1))
++				fi
++				;;
++			manual)
++				[ "$current_level" -ne "$MANUAL_LEVEL" ] && set_fan "$MANUAL_LEVEL"
++				;;
++			off)
++				[ "$current_level" -ne 0 ] && set_fan 0
++				;;
++		esac
++
++		sleep "$INTERVAL"
++	done
++}
++
++main
+diff --git a/package/luci-app-photonicat/root/usr/share/luci/menu.d/luci-app-photonicat.json b/package/luci-app-photonicat/root/usr/share/luci/menu.d/luci-app-photonicat.json
+new file mode 100644
+index 00000000000000..3dcc2e39a37a1a
+--- /dev/null
++++ b/package/luci-app-photonicat/root/usr/share/luci/menu.d/luci-app-photonicat.json
+@@ -0,0 +1,13 @@
++{
++	"admin/status/photonicat": {
++		"title": "Photonicat",
++		"order": 10,
++		"action": {
++			"type": "view",
++			"path": "photonicat/status"
++		},
++		"depends": {
++			"acl": ["luci-app-photonicat"]
++		}
++	}
++}
+diff --git a/package/luci-app-photonicat/root/usr/share/rpcd/acl.d/luci-app-photonicat.json b/package/luci-app-photonicat/root/usr/share/rpcd/acl.d/luci-app-photonicat.json
+new file mode 100644
+index 00000000000000..825aef121dc7cd
+--- /dev/null
++++ b/package/luci-app-photonicat/root/usr/share/rpcd/acl.d/luci-app-photonicat.json
+@@ -0,0 +1,42 @@
++{
++	"luci-app-photonicat": {
++		"description": "Grant access to Photonicat 2 system status and controls",
++		"read": {
++			"ubus": {
++				"luci.photonicat": [
++					"get_status"
++				]
++			},
++			"file": {
++				"/sys/class/thermal/thermal_zone*/temp": ["read"],
++				"/sys/class/thermal/thermal_zone*/type": ["read"],
++				"/sys/class/thermal/cooling_device*/cur_state": ["read"],
++				"/sys/class/thermal/cooling_device*/max_state": ["read"],
++				"/sys/class/thermal/cooling_device*/type": ["read"],
++				"/sys/class/hwmon/hwmon*/temp1_input": ["read"],
++				"/sys/class/hwmon/hwmon*/fan1_input": ["read"],
++				"/sys/class/hwmon/hwmon*/name": ["read"],
++				"/sys/class/power_supply/battery/*": ["read"],
++				"/sys/class/power_supply/charger/*": ["read"],
++				"/sys/devices/system/cpu/cpufreq/policy*/scaling_governor": ["read"],
++				"/sys/devices/system/cpu/cpufreq/policy*/scaling_available_governors": ["read"],
++				"/sys/devices/system/cpu/cpufreq/policy*/scaling_cur_freq": ["read"]
++			},
++			"uci": ["photonicat"]
++		},
++		"write": {
++			"ubus": {
++				"luci.photonicat": [
++					"set_fan_mode",
++					"set_fan_level",
++					"set_fan_curve",
++					"set_cpu_governor"
++				]
++			},
++			"uci": ["photonicat"],
++			"file": {
++				"/sys/devices/system/cpu/cpufreq/policy*/scaling_governor": ["write"]
++			}
++		}
++	}
++}
+diff --git a/package/luci-app-photonicat/root/usr/share/rpcd/ucode/photonicat.uc b/package/luci-app-photonicat/root/usr/share/rpcd/ucode/photonicat.uc
+new file mode 100644
+index 00000000000000..3abc921efaead1
+--- /dev/null
++++ b/package/luci-app-photonicat/root/usr/share/rpcd/ucode/photonicat.uc
+@@ -0,0 +1,206 @@
++#!/usr/bin/env ucode
++// Photonicat 2 — rpcd ucode backend for LuCI
++// Provides system status and hardware control via ubus RPC.
++
++'use strict';
++
++import { readfile, writefile, glob, access } from 'fs';
++import { cursor } from 'uci';
++
++function find_hwmon(name) {
++	let dirs = glob('/sys/class/hwmon/hwmon*');
++	for (let dir in dirs) {
++		let n = trim(readfile(dir + '/name') || '');
++		if (n == name)
++			return dir;
++	}
++	return null;
++}
++
++function find_cooling_device(type) {
++	let dirs = glob('/sys/class/thermal/cooling_device*');
++	for (let dir in dirs) {
++		let t = trim(readfile(dir + '/type') || '');
++		if (t == type)
++			return dir;
++	}
++	return null;
++}
++
++function read_int(path) {
++	let val = readfile(path);
++	return val ? +trim(val) : null;
++}
++
++const methods = {
++	get_status: {
++		call: function() {
++			let result = {};
++
++			// ── Thermal zones ──
++			let zones = [];
++			let tz_dirs = glob('/sys/class/thermal/thermal_zone*');
++			for (let dir in tz_dirs) {
++				let temp = read_int(dir + '/temp');
++				let type = trim(readfile(dir + '/type') || '');
++				if (temp != null)
++					push(zones, { type: type, temp: temp / 1000.0 });
++			}
++			result.thermal_zones = zones;
++
++			// ── Board temperature (MCU hwmon) ──
++			let hwmon_temp = find_hwmon('pcat_pm_hwmon_temp_mb');
++			if (hwmon_temp) {
++				let t = read_int(hwmon_temp + '/temp1_input');
++				if (t != null)
++					result.board_temp = t / 1000.0;
++			}
++
++			// ── Fan RPM ──
++			let hwmon_fan = find_hwmon('pcat_pm_hwmon_speed_fan');
++			if (hwmon_fan)
++				result.fan_rpm = read_int(hwmon_fan + '/fan1_input');
++
++			// ── Fan cooling device ──
++			let cooling = find_cooling_device('pcat-pm-fan');
++			if (cooling) {
++				result.fan_level = read_int(cooling + '/cur_state');
++				result.fan_max_level = read_int(cooling + '/max_state');
++			}
++
++			// ── Battery ──
++			let bat = '/sys/class/power_supply/battery';
++			if (access(bat)) {
++				result.battery = {
++					status:   trim(readfile(bat + '/status') || ''),
++					voltage:  (read_int(bat + '/voltage_now') || 0) / 1000000.0,
++					current:  (read_int(bat + '/current_now') || 0) / 1000000.0,
++					capacity: read_int(bat + '/capacity')
++				};
++			}
++
++			// ── Charger ──
++			let chg = '/sys/class/power_supply/charger';
++			if (access(chg)) {
++				result.charger = {
++					online: read_int(chg + '/online')
++				};
++			}
++
++			// ── CPU policies ──
++			let cpu = {};
++			let policies = glob('/sys/devices/system/cpu/cpufreq/policy*');
++			for (let dir in policies) {
++				let parts = split(dir, '/');
++				let name = parts[length(parts) - 1];
++				cpu[name] = {
++					governor:  trim(readfile(dir + '/scaling_governor') || ''),
++					governors: split(trim(readfile(dir + '/scaling_available_governors') || ''), ' '),
++					cur_freq:  (read_int(dir + '/scaling_cur_freq') || 0) / 1000.0,
++					max_freq:  (read_int(dir + '/scaling_max_freq') || 0) / 1000.0,
++					min_freq:  (read_int(dir + '/scaling_min_freq') || 0) / 1000.0
++				};
++			}
++			result.cpu = cpu;
++
++			// ── Fan config from UCI ──
++			let uci = cursor();
++			uci.load('photonicat');
++			result.fan_config = {
++				mode:         uci.get('photonicat', 'fan', 'mode') || 'auto',
++				manual_level: +(uci.get('photonicat', 'fan', 'manual_level') || '3'),
++				min_temp:     +(uci.get('photonicat', 'fan', 'min_temp') || '45'),
++				max_temp:     +(uci.get('photonicat', 'fan', 'max_temp') || '85'),
++				hysteresis:   +(uci.get('photonicat', 'fan', 'hysteresis') || '3')
++			};
++			uci.unload();
++
++			return result;
++		}
++	},
++
++	set_fan_mode: {
++		args: { mode: '' },
++		call: function(req) {
++			let mode = req.args.mode;
++			if (mode != 'auto' && mode != 'manual' && mode != 'off')
++				return { error: 'Invalid mode: must be auto, manual, or off' };
++
++			let uci = cursor();
++			uci.load('photonicat');
++			uci.set('photonicat', 'fan', 'mode', mode);
++			uci.commit('photonicat');
++			uci.unload();
++			return { success: true };
++		}
++	},
++
++	set_fan_level: {
++		args: { level: 0 },
++		call: function(req) {
++			let level = +req.args.level;
++			if (level < 0 || level > 9)
++				return { error: 'Invalid level: must be 0-9' };
++
++			let uci = cursor();
++			uci.load('photonicat');
++			uci.set('photonicat', 'fan', 'manual_level', '' + level);
++			uci.commit('photonicat');
++			uci.unload();
++			return { success: true };
++		}
++	},
++
++	set_fan_curve: {
++		args: { min_temp: 0, max_temp: 0, hysteresis: 0 },
++		call: function(req) {
++			let min_t = +req.args.min_temp;
++			let max_t = +req.args.max_temp;
++			let hyst  = +req.args.hysteresis;
++
++			if (min_t < 20 || min_t > 80)
++				return { error: 'min_temp must be 20-80' };
++			if (max_t < 50 || max_t > 110)
++				return { error: 'max_temp must be 50-110' };
++			if (max_t <= min_t)
++				return { error: 'max_temp must be greater than min_temp' };
++			if (hyst < 1 || hyst > 15)
++				return { error: 'hysteresis must be 1-15' };
++
++			let uci = cursor();
++			uci.load('photonicat');
++			uci.set('photonicat', 'fan', 'min_temp', '' + min_t);
++			uci.set('photonicat', 'fan', 'max_temp', '' + max_t);
++			uci.set('photonicat', 'fan', 'hysteresis', '' + hyst);
++			uci.commit('photonicat');
++			uci.unload();
++			return { success: true };
++		}
++	},
++
++	set_cpu_governor: {
++		args: { governor: '' },
++		call: function(req) {
++			let governor = req.args.governor;
++			let valid = ['powersave', 'performance', 'schedutil'];
++			if (index(valid, governor) < 0)
++				return { error: 'Invalid governor: must be powersave, performance, or schedutil' };
++
++			// Apply immediately to all CPU frequency policies
++			let policies = glob('/sys/devices/system/cpu/cpufreq/policy*');
++			for (let dir in policies)
++				writefile(dir + '/scaling_governor', governor + '\n');
++
++			// Persist in UCI for boot
++			let uci = cursor();
++			uci.load('photonicat');
++			uci.set('photonicat', 'cpu', 'governor', governor);
++			uci.commit('photonicat');
++			uci.unload();
++
++			return { success: true };
++		}
++	}
++};
++
++return { 'luci.photonicat': methods };
+diff --git a/package/pcat2-display/Makefile b/package/pcat2-display/Makefile
+new file mode 100644
+index 00000000000000..f7b3a772d30ba7
+--- /dev/null
++++ b/package/pcat2-display/Makefile
+@@ -0,0 +1,41 @@
++include $(TOPDIR)/rules.mk
++
++PKG_NAME:=pcat2-display
++PKG_VERSION:=1.0.0
++PKG_RELEASE:=1
++PKG_LICENSE:=GPL-3.0-only
++
++include $(INCLUDE_DIR)/package.mk
++
++define Package/pcat2-display
++  SECTION:=utils
++  CATEGORY:=Utilities
++  TITLE:=PhotoniCAT 2 Mini Display
++  DEPENDS:=@TARGET_rockchip_armv8
++endef
++
++define Package/pcat2-display/description
++  Userspace driver for the PhotoniCAT 2 GC9307 172x320 SPI TFT display.
++  Shows time/date, battery status, WAN/WiFi info, and system stats.
++endef
++
++define Build/Prepare
++	mkdir -p $(PKG_BUILD_DIR)
++	$(CP) ./src/* $(PKG_BUILD_DIR)/
++endef
++
++define Build/Compile
++	$(MAKE) -C $(PKG_BUILD_DIR) \
++		CC="$(TARGET_CC)" \
++		CFLAGS="$(TARGET_CFLAGS) -Wall" \
++		LDFLAGS="$(TARGET_LDFLAGS)"
++endef
++
++define Package/pcat2-display/install
++	$(INSTALL_DIR) $(1)/usr/bin
++	$(INSTALL_BIN) $(PKG_BUILD_DIR)/pcat2-display $(1)/usr/bin/
++	$(INSTALL_DIR) $(1)/etc/init.d
++	$(INSTALL_BIN) ./files/pcat2-display.init $(1)/etc/init.d/pcat2-display
++endef
++
++$(eval $(call BuildPackage,pcat2-display))
+diff --git a/package/pcat2-display/files/pcat2-display.init b/package/pcat2-display/files/pcat2-display.init
+new file mode 100644
+index 00000000000000..a1f950cdb8cfce
+--- /dev/null
++++ b/package/pcat2-display/files/pcat2-display.init
+@@ -0,0 +1,13 @@
++#!/bin/sh /etc/rc.common
++
++START=99
++STOP=10
++USE_PROCD=1
++
++start_service() {
++	procd_open_instance
++	procd_set_param command /usr/bin/pcat2-display
++	procd_set_param respawn 3600 5 5
++	procd_set_param stderr 1
++	procd_close_instance
++}
+diff --git a/package/pcat2-display/src/Makefile b/package/pcat2-display/src/Makefile
+new file mode 100644
+index 00000000000000..e128c6a6278ea8
+--- /dev/null
++++ b/package/pcat2-display/src/Makefile
+@@ -0,0 +1,9 @@
++CC      ?= gcc
++CFLAGS  ?= -O2 -Wall
++LDFLAGS ?=
++
++pcat2-display: pcat2-display.c
++	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $<
++
++clean:
++	rm -f pcat2-display
+diff --git a/package/pcat2-display/src/pcat2-display.c b/package/pcat2-display/src/pcat2-display.c
+new file mode 100644
+index 00000000000000..834ab9326794b1
+--- /dev/null
++++ b/package/pcat2-display/src/pcat2-display.c
+@@ -0,0 +1,799 @@
++/*
++ * pcat2-display - PhotoniCAT 2 Mini Display Status Application
++ *
++ * Drives the GC9307 172x320 TFT LCD via SPI to show system status:
++ * time/date, battery, WAN, WiFi, and system information.
++ *
++ * Hardware: GC9307 on SPI1.0 (6MHz), DC=GPIO3_PD1, RST=GPIO3_PD2, BL=GPIO3_C5
++ * Display: 172x320 pixels, RGB565 color, rotation 180 deg, column offset 34
++ * Backlight: active LOW (PWM polarity inverted per factory DTS)
++ *
++ * Copyright (C) 2026 - GPLv3
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <stdint.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <time.h>
++#include <signal.h>
++#include <errno.h>
++#include <dirent.h>
++#include <sys/ioctl.h>
++#include <linux/spi/spidev.h>
++#include <linux/gpio.h>
++
++/* ------------------------------------------------------------------ */
++/*  Configuration                                                      */
++/* ------------------------------------------------------------------ */
++
++#define SPI_DEVICE      "/dev/spidev1.0"
++#define SPI_SPEED_HZ    6000000     /* 6 MHz */
++#define SPI_CHUNK       4096        /* bytes per SPI transfer */
++
++#define DISP_W          172
++#define DISP_H          320
++#define COL_OFFSET      34          /* GC9307 column offset for 172px panel */
++
++/* GPIO chardev: /dev/gpiochipN where N = bank, offset within bank.
++ * RK3576: gpio0..gpio4 map to /dev/gpiochip0../dev/gpiochip4. */
++#define DC_BANK     3
++#define DC_OFFSET   25              /* GPIO3_PD1 */
++#define RST_BANK    3
++#define RST_OFFSET  26              /* GPIO3_PD2 */
++#define BL_BANK     3
++#define BL_OFFSET   21              /* GPIO3_C5 – PWM backlight pin */
++
++/* GC9307 / ST7789 registers */
++#define CMD_SWRESET 0x01
++#define CMD_SLPOUT  0x11
++#define CMD_SLPIN   0x10
++#define CMD_NORON   0x13
++#define CMD_INVOFF  0x20
++#define CMD_INVON   0x21
++#define CMD_DISPOFF 0x28
++#define CMD_DISPON  0x29
++#define CMD_CASET   0x2A
++#define CMD_RASET   0x2B
++#define CMD_RAMWR   0x2C
++#define CMD_COLMOD  0x3A
++#define CMD_MADCTL  0x36
++#define MADCTL_MX   0x40
++
++/* BGR565 colour helpers – display byte order is big-endian */
++#define RGB565(r,g,b) ( (uint16_t)( \
++        (((uint16_t)((b)>>3))<<11) | \
++        (((uint16_t)((g)>>2))<<5)  | \
++         ((uint16_t)((r)>>3)) ))
++
++/* pre-computed colours (host-endian, swapped on write) */
++#define COL_BLACK   RGB565(0,0,0)
++#define COL_WHITE   RGB565(255,255,255)
++#define COL_RED     RGB565(255,40,40)
++#define COL_GREEN   RGB565(40,255,40)
++#define COL_CYAN    RGB565(0,220,220)
++#define COL_YELLOW  RGB565(255,255,0)
++#define COL_ORANGE  RGB565(255,165,0)
++#define COL_GRAY    RGB565(100,100,100)
++#define COL_DKGRAY  RGB565(40,40,40)
++#define COL_NAVY    RGB565(0,8,30)
++
++#define UPDATE_SEC  5               /* seconds between refreshes */
++
++/* ------------------------------------------------------------------ */
++/*  Adafruit GFX 5x7 bitmap font (column-major, LSB = top row)        */
++/*  Covers ASCII 0x20 (' ') through 0x7E ('~')  –  95 characters      */
++/* ------------------------------------------------------------------ */
++
++static const unsigned char font5x7[95][5] = {
++    {0x00,0x00,0x00,0x00,0x00}, /* 0x20 space */
++    {0x00,0x00,0x5F,0x00,0x00}, /* ! */
++    {0x00,0x07,0x00,0x07,0x00}, /* " */
++    {0x14,0x7F,0x14,0x7F,0x14}, /* # */
++    {0x24,0x2A,0x7F,0x2A,0x12}, /* $ */
++    {0x23,0x13,0x08,0x64,0x62}, /* % */
++    {0x36,0x49,0x55,0x22,0x50}, /* & */
++    {0x00,0x05,0x03,0x00,0x00}, /* ' */
++    {0x00,0x1C,0x22,0x41,0x00}, /* ( */
++    {0x00,0x41,0x22,0x1C,0x00}, /* ) */
++    {0x14,0x08,0x3E,0x08,0x14}, /* * */
++    {0x08,0x08,0x3E,0x08,0x08}, /* + */
++    {0x00,0x50,0x30,0x00,0x00}, /* , */
++    {0x08,0x08,0x08,0x08,0x08}, /* - */
++    {0x00,0x60,0x60,0x00,0x00}, /* . */
++    {0x20,0x10,0x08,0x04,0x02}, /* / */
++    {0x3E,0x51,0x49,0x45,0x3E}, /* 0 */
++    {0x00,0x42,0x7F,0x40,0x00}, /* 1 */
++    {0x42,0x61,0x51,0x49,0x46}, /* 2 */
++    {0x21,0x41,0x45,0x4B,0x31}, /* 3 */
++    {0x18,0x14,0x12,0x7F,0x10}, /* 4 */
++    {0x27,0x45,0x45,0x45,0x39}, /* 5 */
++    {0x3C,0x4A,0x49,0x49,0x30}, /* 6 */
++    {0x01,0x71,0x09,0x05,0x03}, /* 7 */
++    {0x36,0x49,0x49,0x49,0x36}, /* 8 */
++    {0x06,0x49,0x49,0x29,0x1E}, /* 9 */
++    {0x00,0x36,0x36,0x00,0x00}, /* : */
++    {0x00,0x56,0x36,0x00,0x00}, /* ; */
++    {0x08,0x14,0x22,0x41,0x00}, /* < */
++    {0x14,0x14,0x14,0x14,0x14}, /* = */
++    {0x00,0x41,0x22,0x14,0x08}, /* > */
++    {0x02,0x01,0x51,0x09,0x06}, /* ? */
++    {0x32,0x49,0x79,0x41,0x3E}, /* @ */
++    {0x7E,0x11,0x11,0x11,0x7E}, /* A */
++    {0x7F,0x49,0x49,0x49,0x36}, /* B */
++    {0x3E,0x41,0x41,0x41,0x22}, /* C */
++    {0x7F,0x41,0x41,0x22,0x1C}, /* D */
++    {0x7F,0x49,0x49,0x49,0x41}, /* E */
++    {0x7F,0x09,0x09,0x09,0x01}, /* F */
++    {0x3E,0x41,0x49,0x49,0x7A}, /* G */
++    {0x7F,0x08,0x08,0x08,0x7F}, /* H */
++    {0x00,0x41,0x7F,0x41,0x00}, /* I */
++    {0x20,0x40,0x41,0x3F,0x01}, /* J */
++    {0x7F,0x08,0x14,0x22,0x41}, /* K */
++    {0x7F,0x40,0x40,0x40,0x40}, /* L */
++    {0x7F,0x02,0x0C,0x02,0x7F}, /* M */
++    {0x7F,0x04,0x08,0x10,0x7F}, /* N */
++    {0x3E,0x41,0x41,0x41,0x3E}, /* O */
++    {0x7F,0x09,0x09,0x09,0x06}, /* P */
++    {0x3E,0x41,0x51,0x21,0x5E}, /* Q */
++    {0x7F,0x09,0x19,0x29,0x46}, /* R */
++    {0x46,0x49,0x49,0x49,0x31}, /* S */
++    {0x01,0x01,0x7F,0x01,0x01}, /* T */
++    {0x3F,0x40,0x40,0x40,0x3F}, /* U */
++    {0x1F,0x20,0x40,0x20,0x1F}, /* V */
++    {0x3F,0x40,0x38,0x40,0x3F}, /* W */
++    {0x63,0x14,0x08,0x14,0x63}, /* X */
++    {0x07,0x08,0x70,0x08,0x07}, /* Y */
++    {0x61,0x51,0x49,0x45,0x43}, /* Z */
++    {0x00,0x7F,0x41,0x41,0x00}, /* [ */
++    {0x02,0x04,0x08,0x10,0x20}, /* \ */
++    {0x00,0x41,0x41,0x7F,0x00}, /* ] */
++    {0x04,0x02,0x01,0x02,0x04}, /* ^ */
++    {0x40,0x40,0x40,0x40,0x40}, /* _ */
++    {0x00,0x01,0x02,0x04,0x00}, /* ` */
++    {0x20,0x54,0x54,0x54,0x78}, /* a */
++    {0x7F,0x48,0x44,0x44,0x38}, /* b */
++    {0x38,0x44,0x44,0x44,0x20}, /* c */
++    {0x38,0x44,0x44,0x48,0x7F}, /* d */
++    {0x38,0x54,0x54,0x54,0x18}, /* e */
++    {0x08,0x7E,0x09,0x01,0x02}, /* f */
++    {0x0C,0x52,0x52,0x52,0x3E}, /* g */
++    {0x7F,0x08,0x04,0x04,0x78}, /* h */
++    {0x00,0x44,0x7D,0x40,0x00}, /* i */
++    {0x20,0x40,0x44,0x3D,0x00}, /* j */
++    {0x7F,0x10,0x28,0x44,0x00}, /* k */
++    {0x00,0x41,0x7F,0x40,0x00}, /* l */
++    {0x7C,0x04,0x18,0x04,0x78}, /* m */
++    {0x7C,0x08,0x04,0x04,0x78}, /* n */
++    {0x38,0x44,0x44,0x44,0x38}, /* o */
++    {0x7C,0x14,0x14,0x14,0x08}, /* p */
++    {0x08,0x14,0x14,0x18,0x7C}, /* q */
++    {0x7C,0x08,0x04,0x04,0x08}, /* r */
++    {0x48,0x54,0x54,0x54,0x20}, /* s */
++    {0x04,0x3F,0x44,0x40,0x20}, /* t */
++    {0x3C,0x40,0x40,0x20,0x7C}, /* u */
++    {0x1C,0x20,0x40,0x20,0x1C}, /* v */
++    {0x3C,0x40,0x30,0x40,0x3C}, /* w */
++    {0x44,0x28,0x10,0x28,0x44}, /* x */
++    {0x0C,0x50,0x50,0x50,0x3C}, /* y */
++    {0x44,0x64,0x54,0x4C,0x44}, /* z */
++    {0x00,0x08,0x36,0x41,0x00}, /* { */
++    {0x00,0x00,0x7F,0x00,0x00}, /* | */
++    {0x00,0x41,0x36,0x08,0x00}, /* } */
++    {0x10,0x08,0x08,0x10,0x08}, /* ~ */
++};
++
++/* ------------------------------------------------------------------ */
++/*  Global state                                                       */
++/* ------------------------------------------------------------------ */
++
++static volatile sig_atomic_t running = 1;
++static int spi_fd = -1;
++
++/* GPIO chardev line handles (fd from GPIO_GET_LINEHANDLE_IOCTL) */
++static int dc_line_fd  = -1;
++static int rst_line_fd = -1;
++static int bl_line_fd  = -1;
++
++/* framebuffer in display byte order (big-endian RGB565) */
++static uint8_t fb[DISP_W * DISP_H * 2];
++
++/* ------------------------------------------------------------------ */
++/*  Utility: read a sysfs file into a buffer                           */
++/* ------------------------------------------------------------------ */
++
++static int read_sysfs(const char *path, char *buf, size_t len)
++{
++    int fd = open(path, O_RDONLY);
++    if (fd < 0) return -1;
++    ssize_t n = read(fd, buf, len - 1);
++    close(fd);
++    if (n < 0) return -1;
++    buf[n] = '\0';
++    while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r'))
++        buf[--n] = '\0';
++    return 0;
++}
++
++static int read_sysfs_int(const char *path)
++{
++    char buf[32];
++    if (read_sysfs(path, buf, sizeof(buf)) < 0) return -1;
++    return atoi(buf);
++}
++
++/* ------------------------------------------------------------------ */
++/*  GPIO (chardev v2 API – CONFIG_GPIO_CDEV without V1 compat)         */
++/* ------------------------------------------------------------------ */
++
++/*
++ * Request an output GPIO line on the given bank + offset using the
++ * v2 chardev API (GPIO_V2_GET_LINE_IOCTL).  The v1 API is disabled
++ * in OpenWrt's generic kernel config (CONFIG_GPIO_CDEV_V1 is not set).
++ *
++ * Returns the line request fd (>= 0) on success, -1 on failure.
++ */
++static int gpio_request_output(int bank, int offset,
++                               const char *name, int initial)
++{
++    char path[64];
++    snprintf(path, sizeof(path), "/dev/gpiochip%d", bank);
++
++    int chip_fd = open(path, O_RDWR);
++    if (chip_fd < 0) {
++        fprintf(stderr, "gpio: cannot open %s: %s\n", path, strerror(errno));
++        return -1;
++    }
++
++    struct gpio_v2_line_request req;
++    memset(&req, 0, sizeof(req));
++    req.offsets[0]  = offset;
++    req.num_lines   = 1;
++    strncpy(req.consumer, name, sizeof(req.consumer) - 1);
++
++    req.config.flags = GPIO_V2_LINE_FLAG_OUTPUT;
++    if (initial) {
++        /* set the default output value via a single-attribute */
++        req.config.num_attrs = 1;
++        req.config.attrs[0].attr.id = GPIO_V2_LINE_ATTR_ID_OUTPUT_VALUES;
++        req.config.attrs[0].attr.values = 1;   /* bit 0 = line 0 value */
++        req.config.attrs[0].mask = 1;           /* applies to line 0 */
++    }
++
++    if (ioctl(chip_fd, GPIO_V2_GET_LINE_IOCTL, &req) < 0) {
++        fprintf(stderr, "gpio: V2_GET_LINE bank%d offset%d (%s): %s\n",
++                bank, offset, name, strerror(errno));
++        close(chip_fd);
++        return -1;
++    }
++
++    close(chip_fd);     /* chip fd can be closed; line request fd stays valid */
++    return req.fd;
++}
++
++static void gpio_set(int line_fd, int value)
++{
++    if (line_fd < 0) return;
++    struct gpio_v2_line_values vals;
++    memset(&vals, 0, sizeof(vals));
++    vals.mask = 1;                  /* bit 0 = line 0 */
++    vals.bits = value ? 1 : 0;
++    ioctl(line_fd, GPIO_V2_LINE_SET_VALUES_IOCTL, &vals);
++}
++
++/* ------------------------------------------------------------------ */
++/*  SPI helpers                                                        */
++/* ------------------------------------------------------------------ */
++
++static int spi_init(void)
++{
++    spi_fd = open(SPI_DEVICE, O_RDWR);
++    if (spi_fd < 0) { perror(SPI_DEVICE); return -1; }
++
++    uint8_t  mode = SPI_MODE_0;
++    uint8_t  bits = 8;
++    uint32_t speed = SPI_SPEED_HZ;
++
++    ioctl(spi_fd, SPI_IOC_WR_MODE, &mode);
++    ioctl(spi_fd, SPI_IOC_WR_BITS_PER_WORD, &bits);
++    ioctl(spi_fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed);
++    return 0;
++}
++
++static void spi_write(const uint8_t *data, size_t len)
++{
++    while (len > 0) {
++        size_t chunk = (len > SPI_CHUNK) ? SPI_CHUNK : len;
++        struct spi_ioc_transfer tr = {
++            .tx_buf        = (unsigned long)data,
++            .len           = chunk,
++            .speed_hz      = SPI_SPEED_HZ,
++            .bits_per_word = 8,
++        };
++        if (ioctl(spi_fd, SPI_IOC_MESSAGE(1), &tr) < 0)
++            perror("SPI_IOC_MESSAGE");
++        data += chunk;
++        len  -= chunk;
++    }
++}
++
++/* ------------------------------------------------------------------ */
++/*  GC9307 display commands                                            */
++/* ------------------------------------------------------------------ */
++
++static void disp_cmd(uint8_t cmd)
++{
++    gpio_set(dc_line_fd, 0);             /* command mode */
++    spi_write(&cmd, 1);
++}
++
++static void disp_data(const uint8_t *data, size_t len)
++{
++    gpio_set(dc_line_fd, 1);             /* data mode */
++    spi_write(data, len);
++}
++
++static void disp_data1(uint8_t val)
++{
++    disp_data(&val, 1);
++}
++
++static void disp_set_window(int x, int y, int w, int h)
++{
++    uint16_t xs = x + COL_OFFSET, xe = x + w - 1 + COL_OFFSET;
++    uint16_t ys = y,              ye = y + h - 1;
++
++    uint8_t ca[4] = { xs >> 8, xs & 0xFF, xe >> 8, xe & 0xFF };
++    uint8_t ra[4] = { ys >> 8, ys & 0xFF, ye >> 8, ye & 0xFF };
++
++    disp_cmd(CMD_CASET); disp_data(ca, 4);
++    disp_cmd(CMD_RASET); disp_data(ra, 4);
++}
++
++static void disp_init(void)
++{
++    /* HW reset */
++    gpio_set(rst_line_fd, 1); usleep(10000);
++    gpio_set(rst_line_fd, 0); usleep(50000);
++    gpio_set(rst_line_fd, 1); usleep(10000);
++
++    disp_cmd(CMD_SWRESET); usleep(150000);
++    disp_cmd(CMD_SLPOUT);  usleep(150000);
++
++    /* 16-bit colour */
++    disp_cmd(CMD_COLMOD); disp_data1(0x55); usleep(10000);
++
++    /* rotation 180: MADCTL = MX (0x40) */
++    disp_cmd(CMD_MADCTL); disp_data1(MADCTL_MX);
++
++    /* display on – GC9307 uses INVOFF per factory driver */
++    disp_cmd(CMD_INVOFF); usleep(10000);
++    disp_cmd(CMD_NORON);  usleep(10000);
++    disp_cmd(CMD_DISPON); usleep(10000);
++
++    /* backlight on – active LOW (PWM polarity is inverted per factory DTS) */
++    gpio_set(bl_line_fd, 0);
++}
++
++static void disp_sleep(void)
++{
++    gpio_set(bl_line_fd, 1);   /* backlight off (active LOW, so HIGH = off) */
++    disp_cmd(CMD_DISPOFF); usleep(10000);
++    disp_cmd(CMD_SLPIN);   usleep(10000);
++}
++
++/* ------------------------------------------------------------------ */
++/*  Framebuffer primitives                                             */
++/* ------------------------------------------------------------------ */
++
++static void fb_clear(uint16_t col)
++{
++    uint8_t hi = col >> 8, lo = col & 0xFF;
++    for (int i = 0; i < DISP_W * DISP_H; i++) {
++        fb[i * 2]     = hi;
++        fb[i * 2 + 1] = lo;
++    }
++}
++
++static inline void fb_pixel(int x, int y, uint16_t col)
++{
++    if ((unsigned)x >= DISP_W || (unsigned)y >= DISP_H) return;
++    int off = (y * DISP_W + x) * 2;
++    fb[off]     = col >> 8;
++    fb[off + 1] = col & 0xFF;
++}
++
++static void fb_rect(int x, int y, int w, int h, uint16_t col)
++{
++    for (int dy = 0; dy < h; dy++)
++        for (int dx = 0; dx < w; dx++)
++            fb_pixel(x + dx, y + dy, col);
++}
++
++static void fb_hline(int x, int y, int w, uint16_t col)
++{
++    for (int dx = 0; dx < w; dx++)
++        fb_pixel(x + dx, y, col);
++}
++
++/* ------------------------------------------------------------------ */
++/*  Text rendering (5x7 font, scale 1x or 2x)                         */
++/* ------------------------------------------------------------------ */
++
++/*
++ * Draw one character.  The font is column-major: each byte is a
++ * vertical column of 7 pixels (LSB = top).  We render the 5 data
++ * columns plus 1 trailing blank column, and 7 data rows plus
++ * 1 trailing blank row, all scaled by `s`.
++ */
++static void draw_char(int x, int y, char ch, uint16_t fg, uint16_t bg, int s)
++{
++    if (ch < 0x20 || ch > 0x7E) ch = '?';
++    const unsigned char *glyph = font5x7[ch - 0x20];
++
++    for (int col = 0; col < 6; col++) {
++        uint8_t bits = (col < 5) ? glyph[col] : 0;
++        for (int row = 0; row < 8; row++) {
++            uint16_t c = (row < 7 && (bits & (1 << row))) ? fg : bg;
++            for (int dy = 0; dy < s; dy++)
++                for (int dx = 0; dx < s; dx++)
++                    fb_pixel(x + col * s + dx, y + row * s + dy, c);
++        }
++    }
++}
++
++/* returns the X coordinate after the last character */
++static int draw_str(int x, int y, const char *str,
++                    uint16_t fg, uint16_t bg, int s)
++{
++    while (*str) {
++        draw_char(x, y, *str, fg, bg, s);
++        x += 6 * s;
++        str++;
++    }
++    return x;
++}
++
++/* draw string right-aligned at xr (right edge) */
++static void draw_str_r(int xr, int y, const char *str,
++                       uint16_t fg, uint16_t bg, int s)
++{
++    int len = strlen(str);
++    draw_str(xr - len * 6 * s, y, str, fg, bg, s);
++}
++
++/* draw string centred */
++static void draw_str_c(int y, const char *str,
++                       uint16_t fg, uint16_t bg, int s)
++{
++    int w = strlen(str) * 6 * s;
++    draw_str((DISP_W - w) / 2, y, str, fg, bg, s);
++}
++
++/* ------------------------------------------------------------------ */
++/*  Push framebuffer to display                                        */
++/* ------------------------------------------------------------------ */
++
++static void fb_flush(void)
++{
++    disp_set_window(0, 0, DISP_W, DISP_H);
++    disp_cmd(CMD_RAMWR);
++    gpio_set(dc_line_fd, 1);           /* data mode for pixel stream */
++    spi_write(fb, sizeof(fb));
++}
++
++/* ------------------------------------------------------------------ */
++/*  System data collection helpers                                     */
++/* ------------------------------------------------------------------ */
++
++static int get_battery_pct(void)
++{
++    return read_sysfs_int("/sys/class/power_supply/battery/capacity");
++}
++
++static void get_battery_status(char *buf, size_t len)
++{
++    if (read_sysfs("/sys/class/power_supply/battery/status", buf, len) < 0)
++        strncpy(buf, "N/A", len);
++}
++
++static int get_battery_voltage_mv(void)
++{
++    int uv = read_sysfs_int("/sys/class/power_supply/battery/voltage_now");
++    return (uv > 0) ? uv / 1000 : -1;
++}
++
++static int get_battery_current_ma(void)
++{
++    int ua = read_sysfs_int("/sys/class/power_supply/battery/current_now");
++    return (ua >= 0) ? ua / 1000 : -1;
++}
++
++static int get_cpu_temp(void)
++{
++    /* try several thermal zones */
++    static const char *paths[] = {
++        "/sys/class/thermal/thermal_zone1/temp",
++        "/sys/class/thermal/thermal_zone0/temp",
++        NULL
++    };
++    for (int i = 0; paths[i]; i++) {
++        int t = read_sysfs_int(paths[i]);
++        if (t > 0) return t / 1000;
++    }
++    return -1;
++}
++
++static void get_uptime_str(char *buf, size_t len)
++{
++    char raw[64];
++    if (read_sysfs("/proc/uptime", raw, sizeof(raw)) < 0) {
++        strncpy(buf, "N/A", len); return;
++    }
++    int secs = atoi(raw);
++    int d = secs / 86400, h = (secs % 86400) / 3600, m = (secs % 3600) / 60;
++    if (d > 0)      snprintf(buf, len, "%dd %dh %dm", d, h, m);
++    else if (h > 0) snprintf(buf, len, "%dh %dm", h, m);
++    else            snprintf(buf, len, "%dm", m);
++}
++
++static void get_memory(int *used_mb, int *total_mb)
++{
++    FILE *f = fopen("/proc/meminfo", "r");
++    *used_mb = *total_mb = 0;
++    if (!f) return;
++    long total = 0, avail = 0;
++    char line[128];
++    while (fgets(line, sizeof(line), f)) {
++        if (strncmp(line, "MemTotal:", 9) == 0)
++            sscanf(line + 9, " %ld", &total);
++        else if (strncmp(line, "MemAvailable:", 13) == 0)
++            sscanf(line + 13, " %ld", &avail);
++    }
++    fclose(f);
++    *total_mb = (int)(total / 1024);
++    *used_mb  = (int)((total - avail) / 1024);
++}
++
++/* run a shell command, capture first line of output */
++static void run_cmd(const char *cmd, char *buf, size_t len)
++{
++    buf[0] = '\0';
++    FILE *f = popen(cmd, "r");
++    if (!f) return;
++    if (fgets(buf, len, f) == NULL) buf[0] = '\0';
++    pclose(f);
++    char *nl = strchr(buf, '\n');
++    if (nl) *nl = '\0';
++}
++
++static void get_wan_info(char *iface, size_t ilen, char *ip, size_t iplen)
++{
++    strncpy(iface, "", ilen);
++    strncpy(ip, "N/A", iplen);
++
++    /* find default route interface */
++    char line[256];
++    run_cmd("ip route show default 2>/dev/null | head -1", line, sizeof(line));
++    char *dev = strstr(line, "dev ");
++    if (dev) sscanf(dev + 4, "%s", iface);
++
++    if (iface[0] == '\0') return;
++
++    char cmd[256];
++    snprintf(cmd, sizeof(cmd),
++        "ip -4 addr show %s 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1 | head -1",
++        iface);
++    run_cmd(cmd, ip, iplen);
++}
++
++static void get_wifi_ssid(char *buf, size_t len)
++{
++    run_cmd("uci -q get wireless.default_radio0.ssid 2>/dev/null", buf, len);
++    if (buf[0] == '\0') strncpy(buf, "N/A", len);
++}
++
++static void get_wifi_band_chan(char *buf, size_t len)
++{
++    char band[16] = "", chan[16] = "";
++    run_cmd("uci -q get wireless.radio0.band 2>/dev/null", band, sizeof(band));
++    run_cmd("uci -q get wireless.radio0.channel 2>/dev/null", chan, sizeof(chan));
++
++    if (band[0] && chan[0])
++        snprintf(buf, len, "%s Ch%s", band, chan);
++    else
++        strncpy(buf, "N/A", len);
++}
++
++static int get_wifi_clients(void)
++{
++    char buf[16];
++    run_cmd("iwinfo wlan0 assoclist 2>/dev/null | grep -c 'dBm'", buf, sizeof(buf));
++    return atoi(buf);
++}
++
++/* ------------------------------------------------------------------ */
++/*  Render the status screen                                           */
++/* ------------------------------------------------------------------ */
++
++static void render_screen(void)
++{
++    char tmp[128];
++    int y;
++
++    fb_clear(COL_BLACK);
++
++    /* === TOP BAR (dark navy, y 0..23) === */
++    fb_rect(0, 0, DISP_W, 24, COL_NAVY);
++
++    time_t now = time(NULL);
++    struct tm *t = localtime(&now);
++    snprintf(tmp, sizeof(tmp), "%02d:%02d", t->tm_hour, t->tm_min);
++    draw_str(6, 4, tmp, COL_WHITE, COL_NAVY, 2);
++
++    int bpct = get_battery_pct();
++    if (bpct >= 0) {
++        snprintf(tmp, sizeof(tmp), "%d%%", bpct);
++        uint16_t bcol = (bpct > 20) ? COL_GREEN : (bpct > 10 ? COL_YELLOW : COL_RED);
++        draw_str_r(DISP_W - 6, 4, tmp, bcol, COL_NAVY, 2);
++    }
++
++    /* separator */
++    fb_hline(0, 24, DISP_W, COL_CYAN);
++    fb_hline(0, 25, DISP_W, COL_CYAN);
++
++    /* === DATE === */
++    static const char *wday[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
++    static const char *mon[]  = {"Jan","Feb","Mar","Apr","May","Jun",
++                                 "Jul","Aug","Sep","Oct","Nov","Dec"};
++    snprintf(tmp, sizeof(tmp), "%s %s %02d, %d",
++             wday[t->tm_wday], mon[t->tm_mon], t->tm_mday, t->tm_year + 1900);
++    draw_str_c(30, tmp, COL_WHITE, COL_BLACK, 1);
++
++    /* === BATTERY section === */
++    y = 46;
++    draw_str(4, y, "BATTERY", COL_CYAN, COL_BLACK, 1);
++    fb_hline(4, y + 9, DISP_W - 8, COL_DKGRAY);
++    y += 14;
++
++    char status[32];
++    get_battery_status(status, sizeof(status));
++    uint16_t scol = COL_WHITE;
++    if (strstr(status, "Charging"))     scol = COL_GREEN;
++    else if (strstr(status, "Full"))    scol = COL_GREEN;
++    else if (strstr(status, "Not"))     scol = COL_ORANGE;
++    draw_str(8, y, status, scol, COL_BLACK, 1);
++    y += 10;
++
++    int mv = get_battery_voltage_mv();
++    int ma = get_battery_current_ma();
++    if (mv > 0 && ma >= 0)
++        snprintf(tmp, sizeof(tmp), "%d.%02dV  %dmA", mv / 1000, (mv % 1000) / 10, ma);
++    else if (mv > 0)
++        snprintf(tmp, sizeof(tmp), "%d.%02dV", mv / 1000, (mv % 1000) / 10);
++    else
++        strncpy(tmp, "N/A", sizeof(tmp));
++    draw_str(8, y, tmp, COL_WHITE, COL_BLACK, 1);
++
++    /* === NETWORK section === */
++    y += 18;
++    draw_str(4, y, "NETWORK", COL_CYAN, COL_BLACK, 1);
++    fb_hline(4, y + 9, DISP_W - 8, COL_DKGRAY);
++    y += 14;
++
++    char wan_if[32] = "", wan_ip[64] = "N/A";
++    get_wan_info(wan_if, sizeof(wan_if), wan_ip, sizeof(wan_ip));
++    if (wan_if[0]) {
++        char opstate[16] = "?";
++        snprintf(tmp, sizeof(tmp), "/sys/class/net/%s/operstate", wan_if);
++        read_sysfs(tmp, opstate, sizeof(opstate));
++
++        int is_up = (strcmp(opstate, "up") == 0 || strcmp(opstate, "unknown") == 0);
++        snprintf(tmp, sizeof(tmp), "%s %s", wan_if, is_up ? "UP" : "DOWN");
++        draw_str(8, y, tmp, is_up ? COL_GREEN : COL_RED, COL_BLACK, 1);
++    } else {
++        draw_str(8, y, "No default route", COL_RED, COL_BLACK, 1);
++    }
++    y += 10;
++
++    snprintf(tmp, sizeof(tmp), "IP: %s", wan_ip);
++    draw_str(8, y, tmp, COL_WHITE, COL_BLACK, 1);
++
++    /* === WIFI section === */
++    y += 18;
++    draw_str(4, y, "WIFI", COL_CYAN, COL_BLACK, 1);
++    fb_hline(4, y + 9, DISP_W - 8, COL_DKGRAY);
++    y += 14;
++
++    char ssid[64];
++    get_wifi_ssid(ssid, sizeof(ssid));
++    draw_str(8, y, ssid, COL_WHITE, COL_BLACK, 1);
++    y += 10;
++
++    char bandchan[32];
++    get_wifi_band_chan(bandchan, sizeof(bandchan));
++    int clients = get_wifi_clients();
++    snprintf(tmp, sizeof(tmp), "%s  %dSTA", bandchan, clients);
++    draw_str(8, y, tmp, COL_WHITE, COL_BLACK, 1);
++
++    /* === SYSTEM section === */
++    y += 18;
++    draw_str(4, y, "SYSTEM", COL_CYAN, COL_BLACK, 1);
++    fb_hline(4, y + 9, DISP_W - 8, COL_DKGRAY);
++    y += 14;
++
++    int cpu_c = get_cpu_temp();
++    int mem_used, mem_total;
++    get_memory(&mem_used, &mem_total);
++    snprintf(tmp, sizeof(tmp), "CPU %dC  Mem %d/%dM",
++             cpu_c, mem_used, mem_total);
++    draw_str(8, y, tmp, COL_WHITE, COL_BLACK, 1);
++    y += 10;
++
++    char upstr[32];
++    get_uptime_str(upstr, sizeof(upstr));
++    snprintf(tmp, sizeof(tmp), "Up: %s", upstr);
++    draw_str(8, y, tmp, COL_WHITE, COL_BLACK, 1);
++}
++
++/* ------------------------------------------------------------------ */
++/*  Signal handler                                                     */
++/* ------------------------------------------------------------------ */
++
++static void sig_handler(int sig)
++{
++    (void)sig;
++    running = 0;
++}
++
++/* ------------------------------------------------------------------ */
++/*  main                                                               */
++/* ------------------------------------------------------------------ */
++
++int main(void)
++{
++    signal(SIGTERM, sig_handler);
++    signal(SIGINT,  sig_handler);
++
++    /* initialise SPI */
++    if (spi_init() < 0) { fprintf(stderr, "SPI init failed\n"); return 1; }
++
++    /* request GPIO lines via chardev (/dev/gpiochipN) */
++    dc_line_fd  = gpio_request_output(DC_BANK,  DC_OFFSET,  "pcat2-dc",  0);
++    rst_line_fd = gpio_request_output(RST_BANK, RST_OFFSET, "pcat2-rst", 1);
++    bl_line_fd  = gpio_request_output(BL_BANK,  BL_OFFSET,  "pcat2-bl",  0);
++
++    if (dc_line_fd < 0 || rst_line_fd < 0) {
++        fprintf(stderr, "GPIO init failed (DC=%d RST=%d BL=%d)\n",
++                dc_line_fd, rst_line_fd, bl_line_fd);
++        return 1;
++    }
++
++    fprintf(stderr, "pcat2-display: GPIOs OK  DC=bank%d/%d  RST=bank%d/%d  BL=bank%d/%d\n",
++            DC_BANK, DC_OFFSET, RST_BANK, RST_OFFSET, BL_BANK, BL_OFFSET);
++
++    disp_init();
++    fprintf(stderr, "pcat2-display: display initialised (%dx%d)\n",
++            DISP_W, DISP_H);
++
++    /* main loop */
++    while (running) {
++        render_screen();
++        fb_flush();
++        for (int i = 0; i < UPDATE_SEC * 10 && running; i++)
++            usleep(100000);     /* sleep in 100 ms slices so we exit fast */
++    }
++
++    /* cleanup */
++    disp_sleep();
++
++    if (dc_line_fd  >= 0) close(dc_line_fd);
++    if (rst_line_fd >= 0) close(rst_line_fd);
++    if (bl_line_fd  >= 0) close(bl_line_fd);
++    if (spi_fd      >= 0) close(spi_fd);
++
++    fprintf(stderr, "pcat2-display: exited cleanly\n");
++    return 0;
++}
+diff --git a/target/linux/rockchip/armv8/base-files/etc/board.d/02_network b/target/linux/rockchip/armv8/base-files/etc/board.d/02_network
+index 57f45aab7b0ac0..e72e965b03d141 100644
+--- a/target/linux/rockchip/armv8/base-files/etc/board.d/02_network
++++ b/target/linux/rockchip/armv8/base-files/etc/board.d/02_network
+@@ -7,6 +7,7 @@ rockchip_setup_interfaces()
+ 	local board="$1"
+ 
+ 	case "$board" in
++	ariaboard,photonicat-2|\
+ 	armsom,sige7|\
+ 	friendlyarm,nanopi-r2c|\
+ 	friendlyarm,nanopi-r2c-plus|\
+@@ -77,6 +78,7 @@ rockchip_setup_macs()
+ 	local label_mac=""
+ 
+ 	case "$board" in
++	ariaboard,photonicat-2|\
+ 	armsom,sige7|\
+ 	friendlyarm,nanopc-t6|\
+ 	friendlyarm,nanopi-r2c|\
+diff --git a/target/linux/rockchip/armv8/config-6.12 b/target/linux/rockchip/armv8/config-6.12
+index f9c875bae0d563..ae608ad3b3bcd3 100644
+--- a/target/linux/rockchip/armv8/config-6.12
++++ b/target/linux/rockchip/armv8/config-6.12
+@@ -574,6 +574,9 @@ CONFIG_RELOCATABLE=y
+ CONFIG_RESET_CONTROLLER=y
+ CONFIG_RESET_SCMI=y
+ CONFIG_RFS_ACCEL=y
++CONFIG_RFKILL=y
++CONFIG_RFKILL_FULL=y
++CONFIG_RFKILL_GPIO=y
+ CONFIG_ROCKCHIP_ERRATUM_3568002=y
+ CONFIG_ROCKCHIP_ERRATUM_3588001=y
+ CONFIG_ROCKCHIP_GRF=y
+diff --git a/target/linux/rockchip/image/armv8.mk b/target/linux/rockchip/image/armv8.mk
+index 7114a03d4e9f8b..2fbe9731514cef 100644
+--- a/target/linux/rockchip/image/armv8.mk
++++ b/target/linux/rockchip/image/armv8.mk
+@@ -52,6 +52,17 @@ define Device/rk3588s
+   KERNEL_LOADADDR := 0x03000000
+ endef
+ 
++define Device/ariaboard_photonicat-2
++  $(Device/rk3576)
++  DEVICE_VENDOR := Ariaboard
++  DEVICE_MODEL := Photonicat 2
++  UBOOT_DEVICE_NAME := generic-rk3576
++  DEVICE_PACKAGES := ath11k-firmware-wcn6855 kmod-ath11k-pci \
++	kmod-usb-net-qmi-wwan kmod-usb-serial-option \
++	luci-proto-qmi pcat2-display uqmi wpad-basic-mbedtls
++endef
++TARGET_DEVICES += ariaboard_photonicat-2
++
+ define Device/armsom_sige7
+   $(Device/rk3588)
+   DEVICE_VENDOR := ArmSoM
+diff --git a/target/linux/rockchip/patches-6.12/999-arm64-dts-rockchip-rk3576-photonicat-2.patch b/target/linux/rockchip/patches-6.12/999-arm64-dts-rockchip-rk3576-photonicat-2.patch
+new file mode 100644
+index 00000000000000..a0c1296cbab1f5
+--- /dev/null
++++ b/target/linux/rockchip/patches-6.12/999-arm64-dts-rockchip-rk3576-photonicat-2.patch
+@@ -0,0 +1,784 @@
++--- a/arch/arm64/boot/dts/rockchip/Makefile
+++++ b/arch/arm64/boot/dts/rockchip/Makefile
++@@ -133,6 +133,7 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-wo
++ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-wolfvision-pf5-display-vz.dtbo
++ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-wolfvision-pf5-io-expander.dtbo
++ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-nanopi-r76s.dtb
+++dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-photonicat-2.dtb
++ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-rock-4d.dtb
++ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3582-radxa-e52c.dtb
++ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588-armsom-sige7.dtb
++--- /dev/null
+++++ b/arch/arm64/boot/dts/rockchip/rk3576-photonicat-2.dts
++@@ -0,0 +1,771 @@
+++// SPDX-License-Identifier: (GPL-2.0-or-later OR MIT)
+++/*
+++ * Copyright (c) 2026 Brandon Cleary <cleary.brandon@gmail.com>
+++ */
+++
+++/dts-v1/;
+++
+++#include <dt-bindings/gpio/gpio.h>
+++#include <dt-bindings/pinctrl/rockchip.h>
+++#include <dt-bindings/interrupt-controller/irq.h>
+++#include "rk3576.dtsi"
+++
+++/ {
+++	model = "Ariaboard Photonicat 2";
+++	compatible = "ariaboard,photonicat-2", "rockchip,rk3576";
+++
+++	aliases {
+++		serial0 = &uart0;
+++		mmc0 = &sdmmc;
+++		mmc1 = &sdhci;
+++		ethernet0 = &gmac0;
+++		ethernet1 = &gmac1;
+++	};
+++
+++	chosen {
+++		stdout-path = "serial0:1500000n8";
+++	};
+++
+++	/* Root supply from 12V DC input, stepped down to 5V on board */
+++	vcc_5v0_sys: regulator-vcc-5v0-sys {
+++		compatible = "regulator-fixed";
+++		regulator-always-on;
+++		regulator-boot-on;
+++		regulator-min-microvolt = <5000000>;
+++		regulator-max-microvolt = <5000000>;
+++		regulator-name = "vcc_5v0_sys";
+++	};
+++
+++	vcc_3v3_rtc_s5: regulator-vcc-3v3-rtc-s5 {
+++		compatible = "regulator-fixed";
+++		regulator-always-on;
+++		regulator-boot-on;
+++		regulator-min-microvolt = <3300000>;
+++		regulator-max-microvolt = <3300000>;
+++		regulator-name = "vcc_3v3_rtc_s5";
+++		vin-supply = <&vcc_5v0_sys>;
+++	};
+++
+++	vcc_1v1_nldo_s3: regulator-vcc-1v1-nldo-s3 {
+++		compatible = "regulator-fixed";
+++		regulator-always-on;
+++		regulator-boot-on;
+++		regulator-min-microvolt = <1100000>;
+++		regulator-max-microvolt = <1100000>;
+++		regulator-name = "vcc_1v1_nldo_s3";
+++		vin-supply = <&vcc_5v0_sys>;
+++	};
+++
+++	vcc_2v0_pldo_s3: regulator-vcc-2v0-pldo-s3 {
+++		compatible = "regulator-fixed";
+++		regulator-always-on;
+++		regulator-boot-on;
+++		regulator-min-microvolt = <2000000>;
+++		regulator-max-microvolt = <2000000>;
+++		regulator-name = "vcc_2v0_pldo_s3";
+++		vin-supply = <&vcc_5v0_sys>;
+++	};
+++
+++	vcc_1v8_s0: regulator-vcc-1v8-s0 {
+++		compatible = "regulator-fixed";
+++		regulator-always-on;
+++		regulator-boot-on;
+++		regulator-min-microvolt = <1800000>;
+++		regulator-max-microvolt = <1800000>;
+++		regulator-name = "vcc_1v8_s0";
+++		vin-supply = <&vcc_1v8_s3>;
+++	};
+++
+++	vcc_3v3_s0: regulator-vcc-3v3-s0 {
+++		compatible = "regulator-fixed";
+++		regulator-always-on;
+++		regulator-boot-on;
+++		regulator-min-microvolt = <3300000>;
+++		regulator-max-microvolt = <3300000>;
+++		regulator-name = "vcc_3v3_s0";
+++		vin-supply = <&vcc_3v3_s3>;
+++	};
+++
+++	vcc_3v3_pcie0: regulator-vcc-3v3-pcie0 {
+++		compatible = "regulator-fixed";
+++		regulator-name = "vcc_3v3_pcie0";
+++		regulator-min-microvolt = <3300000>;
+++		regulator-max-microvolt = <3300000>;
+++		enable-active-high;
+++		gpio = <&gpio0 RK_PC7 GPIO_ACTIVE_HIGH>;
+++		startup-delay-us = <5000>;
+++		pinctrl-names = "default";
+++		pinctrl-0 = <&pcie0_pwr>;
+++		vin-supply = <&vcc_5v0_sys>;
+++	};
+++
+++	vcc_3v3_pcie1: regulator-vcc-3v3-pcie1 {
+++		compatible = "regulator-fixed";
+++		regulator-name = "vcc_3v3_pcie1";
+++		regulator-min-microvolt = <3300000>;
+++		regulator-max-microvolt = <3300000>;
+++		enable-active-high;
+++		gpio = <&gpio0 RK_PC6 GPIO_ACTIVE_HIGH>;
+++		startup-delay-us = <5000>;
+++		pinctrl-names = "default";
+++		pinctrl-0 = <&pcie1_pwr>;
+++		vin-supply = <&vcc_5v0_sys>;
+++	};
+++
+++	vcc5v0_usb_switch: regulator-vcc5v0-usb-switch {
+++		compatible = "regulator-fixed";
+++		regulator-name = "vcc5v0_usb_switch";
+++		regulator-always-on;
+++		regulator-boot-on;
+++		regulator-min-microvolt = <5000000>;
+++		regulator-max-microvolt = <5000000>;
+++		enable-active-high;
+++		gpio = <&gpio0 RK_PC2 GPIO_ACTIVE_HIGH>;
+++		startup-delay-us = <100000>;
+++		pinctrl-names = "default";
+++		pinctrl-0 = <&usb_switch_pwr>;
+++		vin-supply = <&vcc_5v0_sys>;
+++	};
+++
+++	vcc5v0_otg: regulator-vcc5v0-otg {
+++		compatible = "regulator-fixed";
+++		regulator-name = "vcc5v0_otg";
+++		regulator-always-on;
+++		regulator-boot-on;
+++		regulator-min-microvolt = <5000000>;
+++		regulator-max-microvolt = <5000000>;
+++		enable-active-high;
+++		gpio = <&gpio4 RK_PC4 GPIO_ACTIVE_HIGH>;
+++		pinctrl-names = "default";
+++		pinctrl-0 = <&usb_otg_pwr>;
+++		vin-supply = <&vcc5v0_usb_switch>;
+++	};
+++
+++	rfkill-pcie-wlan {
+++		compatible = "rfkill-gpio";
+++		label = "rfkill-pcie-wlan";
+++		radio-type = "wlan";
+++		shutdown-gpios = <&gpio0 RK_PD1 GPIO_ACTIVE_HIGH>;
+++		pinctrl-names = "default";
+++		pinctrl-0 = <&rfkill_pcie_wlan>;
+++	};
+++
+++	rfkill-pcie-bluetooth {
+++		compatible = "rfkill-gpio";
+++		label = "rfkill-pcie-bluetooth";
+++		radio-type = "bluetooth";
+++		shutdown-gpios = <&gpio0 RK_PD0 GPIO_ACTIVE_HIGH>;
+++		pinctrl-names = "default";
+++		pinctrl-0 = <&rfkill_pcie_bt>;
+++	};
+++
+++	rfkill-usb-wlan {
+++		compatible = "rfkill-gpio";
+++		label = "rfkill-usb-wlan";
+++		radio-type = "wlan";
+++		shutdown-gpios = <&gpio1 RK_PC6 GPIO_ACTIVE_HIGH>;
+++		pinctrl-names = "default";
+++		pinctrl-0 = <&rfkill_usb_wlan>;
+++	};
+++
+++	rfkill-usb-wwan {
+++		compatible = "rfkill-gpio";
+++		label = "rfkill-usb-wwan";
+++		radio-type = "wwan";
+++		shutdown-gpios = <&gpio0 RK_PC0 GPIO_ACTIVE_HIGH>;
+++		reset-gpios = <&gpio0 RK_PB7 GPIO_ACTIVE_LOW>;
+++		pinctrl-names = "default";
+++		pinctrl-0 = <&rfkill_usb_wwan>;
+++	};
+++
+++	battery: battery {
+++		compatible = "simple-battery";
+++		charge-full-design-microvolt-hours = <51800000>;
+++		voltage-min-design-microvolt = <6800000>;
+++		voltage-max-design-microvolt = <8400000>;
+++		ocv-capacity-celsius = <20>;
+++		ocv-capacity-table-0 =
+++			<8344000 100>, <8282000 95>, <8212000 90>, <8150000 85>,
+++			<8088000 80>, <8030000 75>, <7964000 70>, <7910000 65>,
+++			<7856000 60>, <7792000 55>, <7740000 50>, <7700000 45>,
+++			<7658000 40>, <7618000 35>, <7578000 30>, <7534000 25>,
+++			<7482000 20>, <7410000 15>, <7326000 10>, <7174000 5>,
+++			<6800000 0>;
+++	};
+++};
+++
+++&combphy0_ps {
+++	status = "okay";
+++};
+++
+++&combphy1_psu {
+++	status = "okay";
+++};
+++
+++&gpio0 {
+++	wwan-airplane-ctrl {
+++		gpio-hog;
+++		gpios = <RK_PB5 GPIO_ACTIVE_HIGH>;
+++		output-high;
+++		line-name = "wwan-airplane-ctrl";
+++	};
+++};
+++
+++&gpio3 {
+++	usb-hub-reset-hog {
+++		gpio-hog;
+++		gpios = <RK_PB0 GPIO_ACTIVE_LOW>;
+++		output-low;
+++		line-name = "usb-hub-reset";
+++	};
+++};
+++
+++&cpu_b0 {
+++	cpu-supply = <&vdd_cpu_big_s0>;
+++};
+++
+++&cpu_b1 {
+++	cpu-supply = <&vdd_cpu_big_s0>;
+++};
+++
+++&cpu_b2 {
+++	cpu-supply = <&vdd_cpu_big_s0>;
+++};
+++
+++&cpu_b3 {
+++	cpu-supply = <&vdd_cpu_big_s0>;
+++};
+++
+++&cpu_l0 {
+++	cpu-supply = <&vdd_cpu_lit_s0>;
+++};
+++
+++&cpu_l1 {
+++	cpu-supply = <&vdd_cpu_lit_s0>;
+++};
+++
+++&cpu_l2 {
+++	cpu-supply = <&vdd_cpu_lit_s0>;
+++};
+++
+++&cpu_l3 {
+++	cpu-supply = <&vdd_cpu_lit_s0>;
+++};
+++
+++&i2c1 {
+++	status = "okay";
+++
+++	pmic@23 {
+++		compatible = "rockchip,rk806";
+++		reg = <0x23>;
+++		#gpio-cells = <2>;
+++		gpio-controller;
+++		interrupt-parent = <&gpio0>;
+++		interrupts = <6 IRQ_TYPE_LEVEL_LOW>;
+++		pinctrl-names = "default";
+++		pinctrl-0 = <&pmic_pins>, <&rk806_dvs1_null>,
+++			    <&rk806_dvs2_null>, <&rk806_dvs3_null>;
+++		system-power-controller;
+++
+++		vcc1-supply = <&vcc_5v0_sys>;
+++		vcc2-supply = <&vcc_5v0_sys>;
+++		vcc3-supply = <&vcc_5v0_sys>;
+++		vcc4-supply = <&vcc_5v0_sys>;
+++		vcc5-supply = <&vcc_5v0_sys>;
+++		vcc6-supply = <&vcc_5v0_sys>;
+++		vcc7-supply = <&vcc_5v0_sys>;
+++		vcc8-supply = <&vcc_5v0_sys>;
+++		vcc9-supply = <&vcc_5v0_sys>;
+++		vcc10-supply = <&vcc_5v0_sys>;
+++		vcc11-supply = <&vcc_2v0_pldo_s3>;
+++		vcc12-supply = <&vcc_5v0_sys>;
+++		vcc13-supply = <&vcc_1v1_nldo_s3>;
+++		vcc14-supply = <&vcc_1v1_nldo_s3>;
+++		vcca-supply = <&vcc_5v0_sys>;
+++
+++		rk806_dvs1_null: dvs1-null-pins {
+++			pins = "gpio_pwrctrl1";
+++			function = "pin_fun0";
+++		};
+++
+++		rk806_dvs2_null: dvs2-null-pins {
+++			pins = "gpio_pwrctrl2";
+++			function = "pin_fun0";
+++		};
+++
+++		rk806_dvs3_null: dvs3-null-pins {
+++			pins = "gpio_pwrctrl3";
+++			function = "pin_fun0";
+++		};
+++
+++		regulators {
+++			vdd_cpu_big_s0: dcdc-reg1 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-enable-ramp-delay = <400>;
+++				regulator-min-microvolt = <550000>;
+++				regulator-max-microvolt = <950000>;
+++				regulator-name = "vdd_cpu_big_s0";
+++				regulator-ramp-delay = <12500>;
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++				};
+++			};
+++
+++			vdd_npu_s0: dcdc-reg2 {
+++				regulator-boot-on;
+++				regulator-enable-ramp-delay = <400>;
+++				regulator-min-microvolt = <550000>;
+++				regulator-max-microvolt = <950000>;
+++				regulator-name = "vdd_npu_s0";
+++				regulator-ramp-delay = <12500>;
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++				};
+++			};
+++
+++			vdd_cpu_lit_s0: dcdc-reg3 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <550000>;
+++				regulator-max-microvolt = <950000>;
+++				regulator-name = "vdd_cpu_lit_s0";
+++				regulator-ramp-delay = <12500>;
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++					regulator-suspend-microvolt = <750000>;
+++				};
+++			};
+++
+++			vcc_3v3_s3: dcdc-reg4 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <3300000>;
+++				regulator-max-microvolt = <3300000>;
+++				regulator-name = "vcc_3v3_s3";
+++
+++				regulator-state-mem {
+++					regulator-on-in-suspend;
+++					regulator-suspend-microvolt = <3300000>;
+++				};
+++			};
+++
+++			vdd_gpu_s0: dcdc-reg5 {
+++				regulator-boot-on;
+++				regulator-enable-ramp-delay = <400>;
+++				regulator-min-microvolt = <550000>;
+++				regulator-max-microvolt = <900000>;
+++				regulator-name = "vdd_gpu_s0";
+++				regulator-ramp-delay = <12500>;
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++					regulator-suspend-microvolt = <850000>;
+++				};
+++			};
+++
+++			vddq_ddr_s0: dcdc-reg6 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-name = "vddq_ddr_s0";
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++				};
+++			};
+++
+++			vdd_logic_s0: dcdc-reg7 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <550000>;
+++				regulator-max-microvolt = <800000>;
+++				regulator-name = "vdd_logic_s0";
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++				};
+++			};
+++
+++			vcc_1v8_s3: dcdc-reg8 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <1800000>;
+++				regulator-max-microvolt = <1800000>;
+++				regulator-name = "vcc_1v8_s3";
+++
+++				regulator-state-mem {
+++					regulator-on-in-suspend;
+++					regulator-suspend-microvolt = <1800000>;
+++				};
+++			};
+++
+++			vdd2_ddr_s3: dcdc-reg9 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-name = "vdd2_ddr_s3";
+++
+++				regulator-state-mem {
+++					regulator-on-in-suspend;
+++				};
+++			};
+++
+++			vdd_ddr_s0: dcdc-reg10 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <550000>;
+++				regulator-max-microvolt = <1200000>;
+++				regulator-name = "vdd_ddr_s0";
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++				};
+++			};
+++
+++			vcca_1v8_s0: pldo-reg1 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <1800000>;
+++				regulator-max-microvolt = <1800000>;
+++				regulator-name = "vcca_1v8_s0";
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++				};
+++			};
+++
+++			vcca1v8_pldo2_s0: pldo-reg2 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <1800000>;
+++				regulator-max-microvolt = <1800000>;
+++				regulator-name = "vcca1v8_pldo2_s0";
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++				};
+++			};
+++
+++			vdda_1v2_s0: pldo-reg3 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <1200000>;
+++				regulator-max-microvolt = <1200000>;
+++				regulator-name = "vdda_1v2_s0";
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++				};
+++			};
+++
+++			vcca_3v3_s0: pldo-reg4 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <3300000>;
+++				regulator-max-microvolt = <3300000>;
+++				regulator-name = "vcca_3v3_s0";
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++				};
+++			};
+++
+++			vccio_sd_s0: pldo-reg5 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <1800000>;
+++				regulator-max-microvolt = <3300000>;
+++				regulator-name = "vccio_sd_s0";
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++				};
+++			};
+++
+++			vcca1v8_pldo6_s3: pldo-reg6 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <1800000>;
+++				regulator-max-microvolt = <1800000>;
+++				regulator-name = "vcca1v8_pldo6_s3";
+++
+++				regulator-state-mem {
+++					regulator-on-in-suspend;
+++					regulator-suspend-microvolt = <1800000>;
+++				};
+++			};
+++
+++			vdd_0v75_s3: nldo-reg1 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <750000>;
+++				regulator-max-microvolt = <750000>;
+++				regulator-name = "vdd_0v75_s3";
+++
+++				regulator-state-mem {
+++					regulator-on-in-suspend;
+++					regulator-suspend-microvolt = <750000>;
+++				};
+++			};
+++
+++			vdda_ddr_pll_s0: nldo-reg2 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <850000>;
+++				regulator-max-microvolt = <850000>;
+++				regulator-name = "vdda_ddr_pll_s0";
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++				};
+++			};
+++
+++			vdda0v75_hdmi_s0: nldo-reg3 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <837500>;
+++				regulator-max-microvolt = <837500>;
+++				regulator-name = "vdda0v75_hdmi_s0";
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++				};
+++			};
+++
+++			vdda_0v85_s0: nldo-reg4 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <850000>;
+++				regulator-max-microvolt = <850000>;
+++				regulator-name = "vdda_0v85_s0";
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++				};
+++			};
+++
+++			vdda_0v75_s0: nldo-reg5 {
+++				regulator-always-on;
+++				regulator-boot-on;
+++				regulator-min-microvolt = <750000>;
+++				regulator-max-microvolt = <750000>;
+++				regulator-name = "vdda_0v75_s0";
+++
+++				regulator-state-mem {
+++					regulator-off-in-suspend;
+++				};
+++			};
+++		};
+++	};
+++};
+++
+++&gmac0 {
+++	phy-mode = "rgmii-rxid";
+++	clock_in_out = "output";
+++	phy-handle = <&rgmii_phy0>;
+++	pinctrl-names = "default";
+++	pinctrl-0 = <&eth0m1_miim
+++		     &eth0m1_tx_bus2
+++		     &eth0m1_rx_bus2
+++		     &eth0m1_rgmii_clk
+++		     &eth0m1_rgmii_bus
+++		     &ethm1_clk0_25m_out>;
+++	tx_delay = <0x20>;
+++	status = "okay";
+++};
+++
+++&mdio0 {
+++	rgmii_phy0: ethernet-phy@1 {
+++		compatible = "ethernet-phy-id001c.c916";
+++		reg = <0x1>;
+++		clocks = <&cru REFCLKO25M_GMAC0_OUT>;
+++		assigned-clocks = <&cru REFCLKO25M_GMAC0_OUT>;
+++		assigned-clock-rates = <25000000>;
+++		pinctrl-names = "default";
+++		pinctrl-0 = <&gmac0_rst>;
+++		reset-assert-us = <20000>;
+++		reset-deassert-us = <100000>;
+++		reset-gpios = <&gpio0 RK_PD2 GPIO_ACTIVE_LOW>;
+++		realtek,led-data = <0x6d60>;
+++	};
+++};
+++
+++&gmac1 {
+++	phy-mode = "rgmii-rxid";
+++	clock_in_out = "output";
+++	phy-handle = <&rgmii_phy1>;
+++	pinctrl-names = "default";
+++	pinctrl-0 = <&eth1m0_miim
+++		     &eth1m0_tx_bus2
+++		     &eth1m0_rx_bus2
+++		     &eth1m0_rgmii_clk
+++		     &eth1m0_rgmii_bus
+++		     &ethm0_clk1_25m_out>;
+++	tx_delay = <0x20>;
+++	status = "okay";
+++};
+++
+++&mdio1 {
+++	rgmii_phy1: ethernet-phy@1 {
+++		compatible = "ethernet-phy-id001c.c916";
+++		reg = <0x1>;
+++		clocks = <&cru REFCLKO25M_GMAC1_OUT>;
+++		assigned-clocks = <&cru REFCLKO25M_GMAC1_OUT>;
+++		assigned-clock-rates = <25000000>;
+++		pinctrl-names = "default";
+++		pinctrl-0 = <&gmac1_rst>;
+++		reset-assert-us = <20000>;
+++		reset-deassert-us = <100000>;
+++		reset-gpios = <&gpio0 RK_PD3 GPIO_ACTIVE_LOW>;
+++		realtek,led-data = <0x6d60>;
+++	};
+++};
+++
+++&pcie0 {
+++	reset-gpios = <&gpio4 RK_PC7 GPIO_ACTIVE_HIGH>;
+++	vpcie3v3-supply = <&vcc_3v3_pcie0>;
+++	max-link-speed = <2>;
+++	pinctrl-names = "default";
+++	pinctrl-0 = <&pcie0_rst>;
+++	status = "okay";
+++};
+++
+++&pcie1 {
+++	reset-gpios = <&gpio4 RK_PB2 GPIO_ACTIVE_HIGH>;
+++	vpcie3v3-supply = <&vcc_3v3_pcie1>;
+++	max-link-speed = <1>;
+++	pinctrl-names = "default";
+++	pinctrl-0 = <&pcie1_rst>;
+++	status = "okay";
+++};
+++
+++&saradc {
+++	vref-supply = <&vcca_1v8_s0>;
+++	status = "okay";
+++};
+++
+++&sdhci {
+++	bus-width = <8>;
+++	full-pwr-cycle-in-suspend;
+++	mmc-hs400-1_8v;
+++	mmc-hs400-enhanced-strobe;
+++	no-sdio;
+++	no-sd;
+++	non-removable;
+++	status = "okay";
+++};
+++
+++&sdmmc {
+++	bus-width = <4>;
+++	cap-mmc-highspeed;
+++	cap-sd-highspeed;
+++	disable-wp;
+++	no-sdio;
+++	no-mmc;
+++	sd-uhs-sdr104;
+++	vmmc-supply = <&vcc_3v3_s3>;
+++	vqmmc-supply = <&vccio_sd_s0>;
+++	status = "okay";
+++};
+++
+++&spi1 {
+++	status = "okay";
+++	pinctrl-names = "default";
+++	pinctrl-0 = <&spi1m2_csn0 &spi1m2_pins>;
+++
+++	spidev@0 {
+++		compatible = "micron,spi-authenta";
+++		reg = <0>;
+++		spi-max-frequency = <6000000>;
+++	};
+++};
+++
+++&uart0 {
+++	status = "okay";
+++};
+++
+++&uart10 {
+++	pinctrl-0 = <&uart10m2_xfer>;
+++	status = "okay";
+++};
+++
+++&u2phy0 {
+++	status = "okay";
+++
+++	u2phy0_otg: otg-port {
+++		status = "okay";
+++	};
+++};
+++
+++&u2phy1 {
+++	status = "okay";
+++
+++	u2phy1_otg: otg-port {
+++		status = "okay";
+++	};
+++};
+++
+++&usbdp_phy {
+++	status = "okay";
+++};
+++
+++&usb_drd0_dwc3 {
+++	dr_mode = "host";
+++	status = "okay";
+++};
+++
+++&pinctrl {
+++	gmac {
+++		gmac0_rst: gmac0-rst {
+++			rockchip,pins = <0 RK_PD2 RK_FUNC_GPIO &pcfg_pull_none>;
+++		};
+++		gmac1_rst: gmac1-rst {
+++			rockchip,pins = <0 RK_PD3 RK_FUNC_GPIO &pcfg_pull_none>;
+++		};
+++	};
+++
+++	pcie {
+++		pcie0_rst: pcie0-rst {
+++			rockchip,pins = <4 RK_PC7 RK_FUNC_GPIO &pcfg_pull_none>;
+++		};
+++		pcie1_rst: pcie1-rst {
+++			rockchip,pins = <4 RK_PB2 RK_FUNC_GPIO &pcfg_pull_none>;
+++		};
+++		pcie0_pwr: pcie0-pwr {
+++			rockchip,pins = <0 RK_PC7 RK_FUNC_GPIO &pcfg_pull_none>;
+++		};
+++		pcie1_pwr: pcie1-pwr {
+++			rockchip,pins = <0 RK_PC6 RK_FUNC_GPIO &pcfg_pull_none>;
+++		};
+++	};
+++
+++	usb {
+++		usb_switch_pwr: usb-switch-pwr {
+++			rockchip,pins = <0 RK_PC2 RK_FUNC_GPIO &pcfg_pull_none>;
+++		};
+++		usb_otg_pwr: usb-otg-pwr {
+++			rockchip,pins = <4 RK_PC4 RK_FUNC_GPIO &pcfg_pull_none>;
+++		};
+++		usb_hub_rst: usb-hub-rst {
+++			rockchip,pins = <3 RK_PB0 RK_FUNC_GPIO &pcfg_pull_up>;
+++		};
+++	};
+++
+++	rfkill {
+++		rfkill_pcie_wlan: rfkill-pcie-wlan {
+++			rockchip,pins = <0 RK_PD1 RK_FUNC_GPIO &pcfg_pull_none>;
+++		};
+++		rfkill_pcie_bt: rfkill-pcie-bt {
+++			rockchip,pins = <0 RK_PD0 RK_FUNC_GPIO &pcfg_pull_none>;
+++		};
+++		rfkill_usb_wlan: rfkill-usb-wlan {
+++			rockchip,pins = <1 RK_PC6 RK_FUNC_GPIO &pcfg_pull_none>;
+++		};
+++		rfkill_usb_wwan: rfkill-usb-wwan {
+++			rockchip,pins = <0 RK_PC0 RK_FUNC_GPIO &pcfg_pull_none>,
+++					 <0 RK_PB7 RK_FUNC_GPIO &pcfg_pull_up>;
+++		};
+++	};
+++};
