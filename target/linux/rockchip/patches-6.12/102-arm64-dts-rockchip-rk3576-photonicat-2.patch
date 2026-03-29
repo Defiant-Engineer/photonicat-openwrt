@@ -1,3 +1,12 @@
+From: Brandon Cleary <cleary.brandon@gmail.com>
+Date: Fri, 28 Mar 2026 12:00:00 +0000
+Subject: [PATCH] rockchip: add support for Ariaboard Photonicat 2
+
+Add support for the Ariaboard Photonicat 2, a dual-GbE router
+based on the Rockchip RK3576 SoC.
+
+Signed-off-by: Brandon Cleary <cleary.brandon@gmail.com>
+---
 --- a/arch/arm64/boot/dts/rockchip/Makefile
 +++ b/arch/arm64/boot/dts/rockchip/Makefile
 @@ -133,6 +133,7 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-wo
@@ -784,3 +793,4 @@
 +		};
 +	};
 +};
++
