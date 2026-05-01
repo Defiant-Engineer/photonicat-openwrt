@@ -1125,3 +1125,21 @@ define KernelPackage/regulator-userspace-consumer/description
 endef
 
 $(eval $(call KernelPackage,regulator-userspace-consumer))
+
+define KernelPackage/photonicat-pm
+  SUBMENU:=$(OTHER_MENU)
+  TITLE:=Photonicat power management MCU driver
+  DEPENDS:=@TARGET_rockchip_armv8
+  KCONFIG:= \
+	CONFIG_STAGING=y \
+	CONFIG_PHOTONICAT_PM
+  FILES:=$(LINUX_DIR)/drivers/staging/photonicat-pm/photonicat-pm.ko
+  AUTOLOAD:=$(call AutoLoad,30,photonicat-pm,1)
+endef
+
+define KernelPackage/photonicat-pm/description
+  Kernel driver for the Photonicat 2 onboard MCU (Renesas RA2E1).
+  Provides battery, fan, temperature, RTC, and power management.
+endef
+
+$(eval $(call KernelPackage,photonicat-pm))
