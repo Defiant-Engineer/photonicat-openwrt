@@ -57,7 +57,7 @@ define Device/ariaboard_photonicat-2
   DEVICE_VENDOR := Ariaboard
   DEVICE_MODEL := Photonicat 2
   UBOOT_DEVICE_NAME := generic-rk3576
-  DEVICE_PACKAGES := ath11k-firmware-wcn6855 kmod-ath11k-pci \
+  DEVICE_PACKAGES := ath11k-firmware-wcn6855 kmod-ath11k-pci kmod-rfkill \
 	kmod-nvme kmod-photonicat-pm pcat2-display pcat2-mcu \
 	wpad-basic-mbedtls kmod-usb-net-qmi-wwan kmod-usb-serial-option \
 	luci-proto-qmi uqmi

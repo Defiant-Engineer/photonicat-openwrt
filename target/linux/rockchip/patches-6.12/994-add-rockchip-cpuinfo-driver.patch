@@ -1,0 +1,207 @@
+--- a/arch/arm64/kernel/cpuinfo.c
++++ b/arch/arm64/kernel/cpuinfo.c
+@@ -25,6 +25,14 @@
+ #include <linux/smp.h>
+ #include <linux/delay.h>
+ 
++#ifdef CONFIG_ROCKCHIP_CPUINFO
++unsigned int system_serial_low;
++EXPORT_SYMBOL(system_serial_low);
++
++unsigned int system_serial_high;
++EXPORT_SYMBOL(system_serial_high);
++#endif
++
+ /*
+  * In case the boot CPU is hotpluggable, we record its initial state and
+  * current state separately. Certain system registers may contain different
+@@ -255,6 +263,10 @@
+ 		seq_printf(m, "CPU revision\t: %d\n\n", MIDR_REVISION(midr));
+ 	}
+ 
++#ifdef CONFIG_ROCKCHIP_CPUINFO
++	seq_printf(m, "Serial\t\t: %08x%08x\n",
++		system_serial_high, system_serial_low);
++#endif
+ 	return 0;
+ }
+ 
+--- a/drivers/soc/rockchip/Kconfig
++++ b/drivers/soc/rockchip/Kconfig
+@@ -5,6 +5,16 @@
+ # Rockchip Soc drivers
+ #
+ 
++config ROCKCHIP_CPUINFO
++	tristate "Rockchip cpuinfo support"
++	depends on (NVMEM_ROCKCHIP_EFUSE || NVMEM_ROCKCHIP_OTP) && ARM64
++	help
++	  Say y here to enable Rockchip cpuinfo support.
++	  Set system_serial_low/high from eFuse ID.
++	  Serial can read from /proc/cpuinfo.
++
++	  If unsure, say N.
++
+ config ROCKCHIP_GRF
+ 	bool "Rockchip General Register Files support" if COMPILE_TEST
+ 	default y if ARCH_ROCKCHIP
+--- a/drivers/soc/rockchip/Makefile
++++ b/drivers/soc/rockchip/Makefile
+@@ -2,6 +2,7 @@
+ #
+ # Rockchip Soc drivers
+ #
++obj-$(CONFIG_ROCKCHIP_CPUINFO) += rockchip-cpuinfo.o
+ obj-$(CONFIG_ROCKCHIP_GRF) += grf.o
+ obj-$(CONFIG_ROCKCHIP_IODOMAIN) += io-domain.o
+ obj-$(CONFIG_ROCKCHIP_DTPM) += dtpm.o
+--- /dev/null
++++ b/drivers/soc/rockchip/rockchip-cpuinfo.c
+@@ -0,0 +1,147 @@
++/*
++ * Copyright (C) 2017 Rockchip Electronics Co., Ltd.
++ *
++ * This program is free software; you can redistribute it and/or modify it
++ * under the terms of version 2 of the GNU General Public License as
++ * published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
++ * more details.
++ */
++
++#include <linux/crc32.h>
++#include <linux/io.h>
++#include <linux/kernel.h>
++#include <linux/module.h>
++#include <linux/nvmem-consumer.h>
++#include <linux/platform_device.h>
++#include <linux/slab.h>
++#include <linux/of.h>
++
++#define ROCKCHIP_CPU_MASK		0xffff0000
++#define ROCKCHIP_CPU_SHIFT		16
++#define ROCKCHIP_CPU_VERION_MASK	0x0000f000
++#define ROCKCHIP_CPU_VERION_SHIFT	12
++
++extern unsigned int system_serial_low;
++extern unsigned int system_serial_high;
++
++unsigned long rockchip_soc_id;
++EXPORT_SYMBOL(rockchip_soc_id);
++
++static inline unsigned long rockchip_get_cpu_version(void)
++{
++	return (rockchip_soc_id & ROCKCHIP_CPU_VERION_MASK)
++		>> ROCKCHIP_CPU_VERION_SHIFT;
++}
++
++static inline void rockchip_set_cpu_version(unsigned long ver)
++{
++	rockchip_soc_id &= ~ROCKCHIP_CPU_VERION_MASK;
++	rockchip_soc_id |=
++		(ver << ROCKCHIP_CPU_VERION_SHIFT) & ROCKCHIP_CPU_VERION_MASK;
++}
++
++static inline void rockchip_set_cpu(unsigned long code)
++{
++	if (!code)
++		return;
++
++	rockchip_soc_id &= ~ROCKCHIP_CPU_MASK;
++	rockchip_soc_id |= (code << ROCKCHIP_CPU_SHIFT) & ROCKCHIP_CPU_MASK;
++}
++
++static int rockchip_cpuinfo_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct nvmem_cell *cell;
++	unsigned char *efuse_buf, buf[16];
++	size_t len = 0;
++	int i;
++
++	cell = nvmem_cell_get(dev, "cpu-code");
++	if (!IS_ERR(cell)) {
++		efuse_buf = nvmem_cell_read(cell, &len);
++		nvmem_cell_put(cell);
++		if (IS_ERR(efuse_buf))
++			return PTR_ERR(efuse_buf);
++
++		if (len == 2)
++			rockchip_set_cpu((efuse_buf[0] << 8 | efuse_buf[1]));
++		kfree(efuse_buf);
++	}
++
++	cell = nvmem_cell_get(dev, "cpu-version");
++	if (!IS_ERR(cell)) {
++		efuse_buf = nvmem_cell_read(cell, &len);
++		nvmem_cell_put(cell);
++		if (IS_ERR(efuse_buf))
++			return PTR_ERR(efuse_buf);
++
++		if ((len == 1) && (efuse_buf[0] > rockchip_get_cpu_version()))
++			rockchip_set_cpu_version(efuse_buf[0]);
++		kfree(efuse_buf);
++	}
++
++	cell = nvmem_cell_get(dev, "id");
++	if (IS_ERR(cell))
++		return dev_err_probe(dev, PTR_ERR(cell), "failed to get id cell\n");
++
++	efuse_buf = nvmem_cell_read(cell, &len);
++	nvmem_cell_put(cell);
++	if (IS_ERR(efuse_buf))
++		return PTR_ERR(efuse_buf);
++
++	if (len != 16) {
++		kfree(efuse_buf);
++		dev_err(dev, "invalid id len: %zu\n", len);
++		return -EINVAL;
++	}
++
++	for (i = 0; i < 8; i++) {
++		buf[i] = efuse_buf[1 + (i << 1)];
++		buf[i + 8] = efuse_buf[i << 1];
++	}
++
++	kfree(efuse_buf);
++
++	dev_info(dev, "SoC\t\t: %lx\n", rockchip_soc_id);
++
++	system_serial_low = crc32(0, buf, 8);
++	system_serial_high = crc32(system_serial_low, buf + 8, 8);
++
++	dev_info(dev, "Serial\t\t: %08x%08x\n",
++		 system_serial_high, system_serial_low);
++
++	return 0;
++}
++
++static const struct of_device_id rockchip_cpuinfo_of_match[] = {
++	{ .compatible = "rockchip,cpuinfo", },
++	{ },
++};
++MODULE_DEVICE_TABLE(of, rockchip_cpuinfo_of_match);
++
++static struct platform_driver rockchip_cpuinfo_driver = {
++	.probe = rockchip_cpuinfo_probe,
++	.driver = {
++		.name = "rockchip-cpuinfo",
++		.of_match_table = rockchip_cpuinfo_of_match,
++	},
++};
++
++static int __init rockchip_cpuinfo_init(void)
++{
++	return platform_driver_register(&rockchip_cpuinfo_driver);
++}
++subsys_initcall_sync(rockchip_cpuinfo_init);
++
++static void __exit rockchip_cpuinfo_exit(void)
++{
++	platform_driver_unregister(&rockchip_cpuinfo_driver);
++}
++module_exit(rockchip_cpuinfo_exit);
++
++MODULE_LICENSE("GPL");

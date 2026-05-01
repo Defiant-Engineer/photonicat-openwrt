@@ -1,0 +1,7 @@
+--- a/arch/arm64/boot/dts/rockchip/Makefile	2025-05-27 15:57:12.715184662 +0900
++++ b/arch/arm64/boot/dts/rockchip/Makefile	2025-05-27 15:57:35.047820733 +0900
+@@ -154,3 +154,4 @@
+ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588s-rock-5a.dtb
+ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588s-odroid-m2.dtb
+ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588s-orangepi-5.dtb
++dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-photonicat2.dtb

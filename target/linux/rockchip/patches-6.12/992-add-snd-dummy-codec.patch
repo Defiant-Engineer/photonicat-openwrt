@@ -1,0 +1,39 @@
+From 2d577a938d24f238edb19c8481dbb7136ff43cf6 Mon Sep 17 00:00:00 2001
+From: Jai Luthra <j-luthra@ti.com>
+Date: Fri, 9 Feb 2024 13:29:38 +0530
+Subject: [PATCH] HACK: ASoC: soc-utils: Add OF compatible for dummy codec
+
+Signed-off-by: Jai Luthra <j-luthra@ti.com>
+---
+ sound/soc/soc-utils.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/sound/soc/soc-utils.c b/sound/soc/soc-utils.c
+index 1bbd1d077dfd96..f32a2b79a6d03a 100644
+--- a/sound/soc/soc-utils.c
++++ b/sound/soc/soc-utils.c
+@@ -10,6 +10,7 @@
+ #include <linux/platform_device.h>
+ #include <linux/export.h>
+ #include <linux/math.h>
++#include <linux/module.h>
+ #include <sound/core.h>
+ #include <sound/pcm.h>
+ #include <sound/pcm_params.h>
+@@ -240,9 +241,16 @@ static int snd_soc_dummy_probe(struct platform_device *pdev)
+ 	return ret;
+ }
+ 
++static const struct of_device_id soc_dummy_id[] = {
++	{ .compatible = "linux,snd-soc-dummy", },
++	{},
++};
++MODULE_DEVICE_TABLE(of, soc_dummy_id);
++
+ static struct platform_driver soc_dummy_driver = {
+ 	.driver = {
+ 		.name = "snd-soc-dummy",
++		.of_match_table = soc_dummy_id,
+ 	},
+ 	.probe = snd_soc_dummy_probe,
+ };
