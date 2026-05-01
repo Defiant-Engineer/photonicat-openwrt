@@ -58,7 +58,7 @@ static int pcat_status(struct ubus_context *ctx, struct ubus_object *obj,
 		blobmsg_add_u32(&b, "energy_full", last_status.energy_full_uwh);
 	}
 	if (last_status.has_temp) {
-		blobmsg_add_i32(&b, "current", last_status.battery_current_ma);
+		blobmsg_add_u32(&b, "current", last_status.battery_current_ma);
 	}
 	blobmsg_close_table(&b, bat);
 
@@ -68,14 +68,14 @@ static int pcat_status(struct ubus_context *ctx, struct ubus_object *obj,
 	blobmsg_close_table(&b, chg);
 
 	if (last_status.has_temp)
-		blobmsg_add_i32(&b, "board_temp", last_status.board_temp_c);
+		blobmsg_add_u32(&b, "board_temp", last_status.board_temp_c);
 
 	if (last_status.has_motion) {
 		blobmsg_add_u32(&b, "fan_rpm", last_status.fan_rpm);
 		void *acc = blobmsg_open_table(&b, "accel");
-		blobmsg_add_i32(&b, "x", last_status.accel_x);
-		blobmsg_add_i32(&b, "y", last_status.accel_y);
-		blobmsg_add_i32(&b, "z", last_status.accel_z);
+		blobmsg_add_u32(&b, "x", last_status.accel_x);
+		blobmsg_add_u32(&b, "y", last_status.accel_y);
+		blobmsg_add_u32(&b, "z", last_status.accel_z);
 		blobmsg_add_u8(&b, "ready", last_status.accel_ready);
 		blobmsg_close_table(&b, acc);
 	}

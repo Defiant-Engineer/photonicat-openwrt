@@ -246,7 +246,7 @@ static void status_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 		if (bat[1])
 			mdata.battery_mv = blobmsg_get_u32(bat[1]);
 		if (bat[2])
-			mdata.battery_ma = blobmsg_get_i32(bat[2]);
+			mdata.battery_ma = blobmsg_get_u32(bat[2]);
 	}
 	if (tb[1]) {
 		blobmsg_parse(chg_policy, 2, chg, blobmsg_data(tb[1]),
@@ -255,7 +255,7 @@ static void status_cb(struct ubus_request *req, int type, struct blob_attr *msg)
 			mdata.charger_online = blobmsg_get_u32(chg[0]);
 	}
 	if (tb[2])
-		mdata.board_temp = blobmsg_get_i32(tb[2]);
+		mdata.board_temp = blobmsg_get_u32(tb[2]);
 	if (tb[3])
 		mdata.fan_rpm = blobmsg_get_u32(tb[3]);
 	if (tb[4])

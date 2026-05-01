@@ -485,6 +485,7 @@ define Build/Configure
 	$(call Build/Configure/U-Boot)
 
 ifneq ($(filter %rk3576,$(BUILD_VARIANT)),)
+	$(CP) $(FILES_DIR)/rk3576-boost.c $(PKG_BUILD_DIR)/rk3576-boost.c
 	$(TARGET_CC) -nostdlib -ffreestanding -Os -S -o $(PKG_BUILD_DIR)/rk3576-boost.S $(PKG_BUILD_DIR)/rk3576-boost.c
 	$(TARGET_CROSS)as -o $(PKG_BUILD_DIR)/rk3576-boost.o $(PKG_BUILD_DIR)/rk3576-boost.S
 	$(TARGET_CROSS)objcopy -O binary -j .text $(PKG_BUILD_DIR)/rk3576-boost.o $(PKG_BUILD_DIR)/rk3576-boost.bin
