@@ -57,6 +57,8 @@ define Device/ariaboard_photonicat-2
   DEVICE_VENDOR := Ariaboard
   DEVICE_MODEL := Photonicat 2
   UBOOT_DEVICE_NAME := generic-rk3576
+  ROCKCHIP_KERNEL_PARTSIZE := 64
+  ROCKCHIP_ROOTFS_PARTSIZE := 4096
   DEVICE_PACKAGES := ath11k-firmware-wcn6855 kmod-ath11k-pci kmod-rfkill \
 	kmod-aic8800u kmod-nvme kmod-photonicat-pm kmod-photonicat-usb-wdt \
 	kmod-spi-dev pcat2-display pcat2-mcu wpad-basic-mbedtls \

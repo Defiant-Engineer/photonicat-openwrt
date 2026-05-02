@@ -3,7 +3,7 @@
 include $(TOPDIR)/rules.mk
 include $(INCLUDE_DIR)/image.mk
 
-DEVICE_VARS += UBOOT_DEVICE_NAME
+DEVICE_VARS += UBOOT_DEVICE_NAME ROCKCHIP_KERNEL_PARTSIZE ROCKCHIP_ROOTFS_PARTSIZE
 
 define Build/Compile
 	$(CP) $(LINUX_DIR)/COPYING $(KDIR)/COPYING.linux
@@ -35,8 +35,8 @@ define Build/pine64-img
 	# U-Boot SPL expects the U-Boot ITB to be located at sector 0x4000 (8 MiB) on the MMC storage
 	PADDING=1 $(SCRIPT_DIR)/gen_image_generic.sh \
 		$@ \
-		$(CONFIG_TARGET_KERNEL_PARTSIZE) $@.boot \
-		$(CONFIG_TARGET_ROOTFS_PARTSIZE) $(IMAGE_ROOTFS) \
+		$(if $(ROCKCHIP_KERNEL_PARTSIZE),$(ROCKCHIP_KERNEL_PARTSIZE),$(CONFIG_TARGET_KERNEL_PARTSIZE)) $@.boot \
+		$(if $(ROCKCHIP_ROOTFS_PARTSIZE),$(ROCKCHIP_ROOTFS_PARTSIZE),$(CONFIG_TARGET_ROOTFS_PARTSIZE)) $(IMAGE_ROOTFS) \
 		32768
 
 	# Copy the u-boot-rockchip.bin to the image at sector 0x40

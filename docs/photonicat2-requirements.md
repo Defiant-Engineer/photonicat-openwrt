@@ -33,6 +33,10 @@ Local checkout currently being modified:
 - Use `192.168.80.100` through `192.168.80.160` as the LAN DHCP pool.
 - Configure the built-in cellular modem to come up automatically.
 - Keep the Ethernet role assignment aligned with the official Photonicat 2 image: WAN on `eth0`, LAN on `eth1`.
+- Match the official Photonicat 2 eMMC image sizing closely enough for normal use:
+  - 64 MiB boot partition.
+  - 4096 MiB root filesystem partition.
+  - Large writable overlay created from the unused rootfs partition space on first boot.
 
 ## Router Access Used For Discovery
 

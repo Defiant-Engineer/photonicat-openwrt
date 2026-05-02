@@ -25,6 +25,7 @@ Options:
 - Run `./scripts/feeds install -a`.
 - Run `gmake defconfig`.
 - Build the Photonicat 2 image.
+- After building, inspect the generated image partition table and confirm partition 1 is 64 MiB and partition 2 is 4096 MiB.
 - Confirm the final image contains:
   - `luci`
   - `opkg`
@@ -43,6 +44,9 @@ Options:
 After flashing or booting the image, verify:
 
 - The board boots without kernel panic.
+- `/dev/mmcblk0p1` is about 64 MiB and mounted at `/boot`.
+- `/dev/mmcblk0p2` is about 4 GiB and mounted as `/rom`.
+- `/overlay` is backed by a large `rootfs_data` filesystem.
 - Ethernet comes up.
 - LuCI is reachable.
 - The default LAN address is `192.168.80.1/24`.

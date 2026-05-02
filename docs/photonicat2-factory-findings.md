@@ -11,6 +11,19 @@ These notes summarize what was found on the running official Photonicat 2 image 
 
 ## Hardware Observed
 
+## Factory Storage Layout
+
+The official Photonicat 2 image was inspected on the running router.
+
+- eMMC device: `/dev/mmcblk0`, 115.3 GiB
+- Boot partition: `/dev/mmcblk0p1`, 64 MiB, ext4, label `kernel`, mounted at `/boot`
+- Root partition: `/dev/mmcblk0p2`, 4 GiB, squashfs, mounted read-only at `/rom`
+- Writable overlay: `/dev/loop0`, 3.8 GiB, F2FS label `rootfs_data`, mounted at `/overlay`
+- Overlay root: `overlayfs:/overlay`, 3.8 GiB available as `/`
+- Kernel command line root: `root=PARTUUID=5452574f-02`
+
+The read-only squashfs content was about 194 MiB used, but the partition that contains it is 4 GiB. The custom image should therefore build a 64 MiB boot partition and a 4096 MiB root filesystem partition so first boot can create a similarly large writable overlay.
+
 ### PCIe WiFi
 
 - Device: Qualcomm QCNFA765 / WCN6855

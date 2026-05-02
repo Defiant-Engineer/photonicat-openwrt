@@ -7,8 +7,16 @@ This file records the modifications made in this fork so far.
 Updated:
 
 - `target/linux/rockchip/image/armv8.mk`
+- `target/linux/rockchip/image/Makefile`
 
 The `ariaboard_photonicat-2` device profile now includes the packages needed for the observed factory hardware and the requested user-facing services.
+
+The Photonicat 2 image now also overrides the Rockchip image partition sizes to match the official image layout:
+
+- Boot partition: `64` MiB
+- Root filesystem partition: `4096` MiB
+
+This replaces the small default OpenWrt Rockchip rootfs partition for this device only.
 
 Hardware and modem packages added or confirmed:
 
