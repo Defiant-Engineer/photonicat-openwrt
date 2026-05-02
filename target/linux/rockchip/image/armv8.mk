@@ -58,9 +58,13 @@ define Device/ariaboard_photonicat-2
   DEVICE_MODEL := Photonicat 2
   UBOOT_DEVICE_NAME := generic-rk3576
   DEVICE_PACKAGES := ath11k-firmware-wcn6855 kmod-ath11k-pci kmod-rfkill \
-	kmod-nvme kmod-photonicat-pm pcat2-display pcat2-mcu \
-	wpad-basic-mbedtls kmod-usb-net-qmi-wwan kmod-usb-serial-option \
-	luci-proto-qmi uqmi
+	kmod-aic8800u kmod-nvme kmod-photonicat-pm kmod-photonicat-usb-wdt \
+	kmod-spi-dev pcat2-display pcat2-mcu wpad-basic-mbedtls \
+	kmod-usb-net-qmi-wwan kmod-usb-serial-option kmod-usb-serial-qualcomm \
+	libqmi luci luci-app-adguardhome luci-app-dockerman \
+	luci-app-mwan3 luci-app-tailscale-community luci-proto-qmi mwan3 opkg \
+	qmi-utils quectel-cm uqmi wwan adguardhome containerd docker \
+	docker-compose dockerd runc tailscale
 endef
 TARGET_DEVICES += ariaboard_photonicat-2
 

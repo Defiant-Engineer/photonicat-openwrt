@@ -1,0 +1,31 @@
+#!/bin/sh
+
+. /lib/functions.sh
+
+case "$(board_name)" in
+ariaboard,photonicat2|\
+ariaboard,photonicat-2)
+	uci -q batch <<-EOF
+		set dhcp.lan.start='100'
+		set dhcp.lan.limit='61'
+		set firewall.@zone[1].masq6='1'
+		del_list firewall.@zone[1].network='wwan_5g'
+		del_list firewall.@zone[1].network='wwan_lte'
+		del_list firewall.@zone[1].network='wwan_5g_v6'
+		del_list firewall.@zone[1].network='wwan_lte_v6'
+		add_list firewall.@zone[1].network='wwan_5g'
+		add_list firewall.@zone[1].network='wwan_lte'
+		add_list firewall.@zone[1].network='wwan_5g_v6'
+		add_list firewall.@zone[1].network='wwan_lte_v6'
+	EOF
+	uci commit dhcp
+	uci commit firewall
+
+	if [ -x /etc/init.d/quectel-cm ]; then
+		/etc/init.d/quectel-cm enable
+		/etc/init.d/quectel-cm start
+	fi
+	;;
+esac
+
+exit 0

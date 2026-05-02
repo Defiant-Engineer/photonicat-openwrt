@@ -376,11 +376,13 @@ define KernelPackage/rfkill
   DEPENDS:=@USE_RFKILL +kmod-input-core
   KCONFIG:= \
     CONFIG_RFKILL_FULL \
+    CONFIG_RFKILL_GPIO \
     CONFIG_RFKILL_INPUT=y \
     CONFIG_RFKILL_LEDS=y
   FILES:= \
-    $(LINUX_DIR)/net/rfkill/rfkill.ko
-  AUTOLOAD:=$(call AutoLoad,20,rfkill)
+    $(LINUX_DIR)/net/rfkill/rfkill.ko \
+    $(LINUX_DIR)/net/rfkill/rfkill-gpio.ko
+  AUTOLOAD:=$(call AutoLoad,20,rfkill-gpio)
 endef
 
 define KernelPackage/rfkill/description
@@ -1143,3 +1145,20 @@ define KernelPackage/photonicat-pm/description
 endef
 
 $(eval $(call KernelPackage,photonicat-pm))
+
+define KernelPackage/photonicat-usb-wdt
+  SUBMENU:=$(OTHER_MENU)
+  TITLE:=Photonicat USB hub watchdog
+  DEPENDS:=@TARGET_rockchip_armv8 +kmod-usb-core
+  KCONFIG:= \
+	CONFIG_STAGING=y \
+	CONFIG_PHOTONICAT_USB_WDT
+  FILES:=$(LINUX_DIR)/drivers/staging/photonicat-usb-wdt/photonicat-usb-wdt.ko
+  AUTOLOAD:=$(call AutoLoad,31,photonicat-usb-wdt,1)
+endef
+
+define KernelPackage/photonicat-usb-wdt/description
+  Kernel driver for the Photonicat 2 USB hub watchdog/reset controller.
+endef
+
+$(eval $(call KernelPackage,photonicat-usb-wdt))

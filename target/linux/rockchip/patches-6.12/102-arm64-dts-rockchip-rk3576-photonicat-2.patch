@@ -19,7 +19,7 @@ Signed-off-by: Brandon Cleary <cleary.brandon@gmail.com>
  dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3588-armsom-sige7.dtb
 --- /dev/null
 +++ b/arch/arm64/boot/dts/rockchip/rk3576-photonicat-2.dts
-@@ -0,0 +1,772 @@
+@@ -0,0 +1,787 @@
 +// SPDX-License-Identifier: (GPL-2.0-or-later OR MIT)
 +/*
 + * Copyright (c) 2026 Brandon Cleary <cleary.brandon@gmail.com>
@@ -34,7 +34,7 @@ Signed-off-by: Brandon Cleary <cleary.brandon@gmail.com>
 +
 +/ {
 +	model = "Ariaboard Photonicat 2";
-+	compatible = "ariaboard,photonicat-2", "rockchip,rk3576";
++	compatible = "ariaboard,photonicat2", "rockchip,rk3576";
 +
 +	aliases {
 +		ethernet0 = &gmac0;
@@ -98,6 +98,17 @@ Signed-off-by: Brandon Cleary <cleary.brandon@gmail.com>
 +		reset-gpios = <&gpio0 RK_PB7 GPIO_ACTIVE_LOW>;
 +		pinctrl-names = "default";
 +		pinctrl-0 = <&rfkill_usb_wwan>;
++	};
++
++	pcat-usb-wdt {
++		compatible = "pcat-usb-watchdog";
++		pinctrl-names = "default";
++		pinctrl-0 = <&usb_hub_rst>;
++		reset-gpios = <&gpio3 RK_PB0 GPIO_ACTIVE_LOW>;
++		target-vid = <0x05e3>;
++		target-pid = <0x0610>;
++		reset-ms = <50>;
++		scan-interval = <15000>;
 +	};
 +
 +	vcc_1v1_nldo_s3: regulator-vcc-1v1-nldo-s3 {
@@ -229,17 +240,6 @@ Signed-off-by: Brandon Cleary <cleary.brandon@gmail.com>
 +		gpios = <RK_PB5 GPIO_ACTIVE_HIGH>;
 +		output-high;
 +		line-name = "wwan-airplane-ctrl";
-+	};
-+};
-+
-+&gpio3 {
-+	usb-hub-reset-hog {
-+		gpio-hog;
-+		gpios = <RK_PB0 GPIO_ACTIVE_LOW>;
-+		line-name = "usb-hub-reset";
-+		output-low;
-+		pinctrl-names = "default";
-+		pinctrl-0 = <&usb_hub_rst>;
 +	};
 +};
 +
@@ -712,6 +712,21 @@ Signed-off-by: Brandon Cleary <cleary.brandon@gmail.com>
 +&uart10 {
 +	pinctrl-0 = <&uart10m2_xfer>;
 +	status = "okay";
++
++	pcat-pm {
++		compatible = "photonicat-pm";
++		baudrate = <115200>;
++		pm-version = <2>;
++		power-gpio = <&gpio0 RK_PC1 GPIO_ACTIVE_HIGH>;
++		force-poweroff-timeout = <60>;
++
++		charger {
++			monitored-battery = <&battery>;
++		};
++
++		fan {
++		};
++	};
 +};
 +
 +&u2phy0 {
